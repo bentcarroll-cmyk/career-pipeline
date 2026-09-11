@@ -9,6 +9,7 @@ from career_pipeline.packets import (
     PacketOptions,
     advance_packet,
     complete_local_delivery,
+    load_manifest,
     start_packet,
     verify_local_artifacts,
 )
@@ -177,6 +178,10 @@ class PacketTests(unittest.TestCase):
                 canonical["application_versions"][0]["resume_pdf"],
                 record.resume_pdf.as_posix(),
             )
+            persisted = load_manifest(
+                workspace.state / "application-manifest.json"
+            )
+            self.assertEqual(persisted.packets[job_id][-1].stage, "ready")
 
 
 if __name__ == "__main__":

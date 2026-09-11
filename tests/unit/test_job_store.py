@@ -64,7 +64,16 @@ class JobStoreTests(unittest.TestCase):
 
             with workspace_lock(workspace):
                 self.assertTrue((workspace.state / ".workspace.lock").exists())
-            self.assertFalse((workspace.state / ".workspace.lock").exists())
+            self.assertTrue((workspace.state / ".workspace.lock").exists())
+
+    def test_stale_lock_marker_does_not_block_a_new_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            lock_path = workspace.state / ".workspace.lock"
+            lock_path.write_text("synthetic prior owner\n", encoding="utf-8")
+
+            with workspace_lock(workspace):
+                self.assertTrue(lock_path.is_file())
 
     def test_ids_are_six_digit_monotonic_and_never_reused(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

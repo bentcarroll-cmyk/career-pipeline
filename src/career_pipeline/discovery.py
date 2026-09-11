@@ -13,7 +13,13 @@ from .contracts import WorkspacePaths
 from .dedupe import candidate_key
 from .evaluation import JobAssessment
 from .indexes import load_indexes, rebuild_indexes
-from .job_store import DuplicateJobError, create_job, workspace_lock
+from .job_store import (
+    DuplicateJobError,
+    create_job,
+    read_job,
+    reverify_job,
+    workspace_lock,
+)
 from .sources.base import CandidateJob
 
 
@@ -31,6 +37,7 @@ class DiscoveryOutcome:
     created_job_ids: tuple[str, ...]
     duplicate_keys: tuple[str, ...]
     non_match_keys: tuple[str, ...]
+    meaningful_change_job_ids: tuple[str, ...]
     run_evidence: Path
 
 
@@ -62,6 +69,7 @@ def deliver_reviewed_jobs(
     created: list[str] = []
     duplicates: list[str] = []
     non_matches: list[str] = []
+    meaningful_changes: list[str] = []
     canonical_jobs = dict(state.canonical_jobs)
     for item in reviewed:
         key = candidate_key(item.candidate)
@@ -70,6 +78,23 @@ def deliver_reviewed_jobs(
             continue
         if key in identities:
             duplicates.append(key)
+            matched = identities[key]
+            if isinstance(matched, list) and len(matched) == 1:
+                job_id = str(matched[0])
+                canonical_jobs[key] = job_id
+                existing = read_job(workspace, job_id)
+                if existing.get("source") == item.candidate.source:
+                    result = reverify_job(
+                        workspace,
+                        job_id,
+                        item.candidate,
+                        item.assessment,
+                        posting_markdown=item.posting_markdown,
+                        assessment_markdown=item.assessment_markdown,
+                        occurred_at=occurred_at,
+                    )
+                    if result.changed:
+                        meaningful_changes.append(job_id)
             continue
         try:
             record = create_job(
@@ -80,8 +105,24 @@ def deliver_reviewed_jobs(
                 assessment_markdown=item.assessment_markdown,
                 occurred_at=occurred_at,
             )
-        except DuplicateJobError:
+        except DuplicateJobError as exc:
             duplicates.append(key)
+            if len(exc.job_ids) == 1:
+                job_id = exc.job_ids[0]
+                canonical_jobs[key] = job_id
+                existing = read_job(workspace, job_id)
+                if existing.get("source") == item.candidate.source:
+                    result = reverify_job(
+                        workspace,
+                        job_id,
+                        item.candidate,
+                        item.assessment,
+                        posting_markdown=item.posting_markdown,
+                        assessment_markdown=item.assessment_markdown,
+                        occurred_at=occurred_at,
+                    )
+                    if result.changed:
+                        meaningful_changes.append(job_id)
             continue
         job_id = str(record["job_id"])
         created.append(job_id)
@@ -102,6 +143,7 @@ def deliver_reviewed_jobs(
                 "created_job_ids": created,
                 "duplicate_keys": duplicates,
                 "non_match_keys": non_matches,
+                "meaningful_change_job_ids": meaningful_changes,
             },
         )
     return DiscoveryOutcome(
@@ -109,5 +151,6 @@ def deliver_reviewed_jobs(
         created_job_ids=tuple(created),
         duplicate_keys=tuple(duplicates),
         non_match_keys=tuple(non_matches),
+        meaningful_change_job_ids=tuple(dict.fromkeys(meaningful_changes)),
         run_evidence=evidence_path,
     )

@@ -11,7 +11,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from career_pipeline.checkpoints import DiscoveryState
+from career_pipeline.checkpoints import (
+    DiscoveryState,
+    SourceResult,
+    complete_source,
+    load_discovery_state,
+    save_discovery_state,
+)
 from career_pipeline.discovery import ReviewedJob, deliver_reviewed_jobs
 from career_pipeline.evaluation import EvidenceClaim, JobAssessment
 from career_pipeline.sources.base import CandidateJob
@@ -51,26 +57,52 @@ def _reviewed(path: Path) -> tuple[ReviewedJob, ...]:
     return tuple(results)
 
 
+def _source_results(path: Path) -> tuple[tuple[str, SourceResult], ...]:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    results: list[tuple[str, SourceResult]] = []
+    for source, value in sorted(raw.get("source_results", {}).items()):
+        results.append(
+            (
+                source,
+                SourceResult(
+                    success=value["success"],
+                    completed_at=value["completed_at"],
+                    seen_records=tuple(value.get("seen_records", ())),
+                    cursor=value.get("cursor"),
+                ),
+            )
+        )
+    return tuple(results)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--workspace", required=True, type=Path)
     parser.add_argument("--reviewed", required=True, type=Path)
     parser.add_argument("--occurred-at", required=True)
     args = parser.parse_args()
+    workspace = create_workspace(args.workspace)
+    state_path = workspace.state / "discovery-state.json"
+    state = load_discovery_state(state_path) if state_path.exists() else DiscoveryState()
     outcome = deliver_reviewed_jobs(
-        create_workspace(args.workspace),
-        DiscoveryState(),
+        workspace,
+        state,
         _reviewed(args.reviewed),
         occurred_at=args.occurred_at,
     )
+    state = outcome.state
+    for source, result in _source_results(args.reviewed):
+        state = complete_source(state, source, result)
+    save_discovery_state(state_path, state)
     print(
         json.dumps(
             {
                 "created_job_ids": outcome.created_job_ids,
                 "duplicate_keys": outcome.duplicate_keys,
                 "non_match_keys": outcome.non_match_keys,
-                "stable_review_batch": outcome.state.stable_review_batch,
-                "run_evidence": outcome.run_evidence.relative_to(args.workspace).as_posix(),
+                "meaningful_change_job_ids": outcome.meaningful_change_job_ids,
+                "stable_review_batch": state.stable_review_batch,
+                "run_evidence": outcome.run_evidence.relative_to(workspace.root).as_posix(),
             },
             sort_keys=True,
         )

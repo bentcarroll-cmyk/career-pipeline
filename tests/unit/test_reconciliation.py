@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 
 from career_pipeline.reconciliation import (
     LifecycleCandidate,
@@ -14,6 +15,7 @@ CANDIDATE = LifecycleCandidate(
     employer="Example Organization",
     title="Operations Lead",
     requisition_id="SYN-301",
+    status="new",
 )
 
 
@@ -92,6 +94,22 @@ class ReconciliationTests(unittest.TestCase):
         )
         self.assertEqual(seen.reason, "evidence_already_seen")
         self.assertEqual(disabled.reason, "source_not_enabled_for_lifecycle")
+
+    def test_terminal_or_regressive_status_change_requires_review(self) -> None:
+        closed_confirmation = classify_lifecycle_evidence(
+            confirmation(),
+            (replace(CANDIDATE, status="closed"),),
+            enabled_sources=("gmail",),
+        )
+        offer_rejection = classify_lifecycle_evidence(
+            replace(confirmation(), event_class="rejection"),
+            (replace(CANDIDATE, status="offer"),),
+            enabled_sources=("gmail",),
+        )
+
+        self.assertEqual(closed_confirmation.action, "needs_review")
+        self.assertEqual(closed_confirmation.reason, "status_transition_requires_review")
+        self.assertEqual(offer_rejection.action, "needs_review")
 
     def test_minimal_receipt_excludes_matching_content(self) -> None:
         evidence = confirmation()

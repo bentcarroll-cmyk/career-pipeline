@@ -1,11 +1,20 @@
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from career_pipeline.evaluation import EvidenceClaim, JobAssessment
-from career_pipeline.job_store import JobStoreError, create_job, read_job
+from career_pipeline.job_store import (
+    JobStoreError,
+    create_job,
+    read_job,
+    update_job_status,
+    workspace_lock,
+)
 from career_pipeline.sources.base import CandidateJob
 from career_pipeline.workspace import create_workspace
 
@@ -46,6 +55,77 @@ def assessment() -> JobAssessment:
 
 
 class JobStoreRecoveryTests(unittest.TestCase):
+    def test_process_exit_releases_workspace_lock_ownership(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            environment = dict(os.environ)
+            environment["PYTHONPATH"] = str(
+                Path(__file__).resolve().parents[2] / "src"
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import os, sys\n"
+                        "from pathlib import Path\n"
+                        "from career_pipeline.job_store import workspace_lock\n"
+                        "from career_pipeline.workspace import create_workspace\n"
+                        "workspace = create_workspace(Path(sys.argv[1]))\n"
+                        "with workspace_lock(workspace):\n"
+                        "    os._exit(0)\n"
+                    ),
+                    str(workspace.root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            with workspace_lock(workspace):
+                self.assertTrue((workspace.state / ".workspace.lock").is_file())
+
+    def test_retry_recovers_event_and_snapshot_after_interrupted_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = create_job(
+                workspace,
+                candidate(),
+                assessment(),
+                posting_markdown="# Synthetic posting\n",
+                assessment_markdown="# Synthetic assessment\n",
+                occurred_at="2026-09-11T12:00:00Z",
+            )["job_id"]
+            with patch(
+                "career_pipeline.job_store.atomic_write_text",
+                side_effect=OSError("synthetic interruption after journal"),
+            ):
+                with self.assertRaises(OSError):
+                    update_job_status(
+                        workspace,
+                        job_id,
+                        "applied",
+                        occurred_at="2026-09-11T12:05:00Z",
+                    )
+
+            with self.assertRaises(JobStoreError):
+                read_job(workspace, job_id)
+            recovered = update_job_status(
+                workspace,
+                job_id,
+                "applied",
+                occurred_at="2026-09-11T12:05:00Z",
+            )
+
+            self.assertEqual(recovered["status"], "applied")
+            events = (workspace.jobs / job_id / "events.jsonl").read_text().splitlines()
+            self.assertEqual(len(events), 2)
+            self.assertFalse(
+                (workspace.jobs / job_id / "working" / "pending-mutation.json").exists()
+            )
+
     def test_failed_creation_consumes_id_and_removes_temporary_folder(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace = create_workspace(Path(raw) / "Synthetic-Career")

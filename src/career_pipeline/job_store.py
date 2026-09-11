@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import json
 import os
 import re
 import shutil
 import tempfile
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Iterator, Mapping
 
@@ -34,6 +36,16 @@ class DuplicateJobError(JobStoreError):
         self.job_ids = job_ids
 
 
+@dataclass(frozen=True)
+class ReverificationResult:
+    record: Mapping[str, object]
+    changed_fields: tuple[str, ...]
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.changed_fields)
+
+
 _JOB_ID = re.compile(r"JOB-[0-9]{6}")
 _STATUSES = {
     "new",
@@ -46,6 +58,8 @@ _STATUSES = {
     "not_pursuing",
     "closed",
 }
+_HELD_LOCKS: set[Path] = set()
+_PENDING_MUTATION = "pending-mutation.json"
 
 
 def _fsync_directory(path: Path) -> None:
@@ -59,24 +73,29 @@ def _fsync_directory(path: Path) -> None:
 @contextmanager
 def workspace_lock(workspace: WorkspacePaths) -> Iterator[None]:
     lock_path = workspace.state / ".workspace.lock"
+    resolved_lock = lock_path.resolve()
+    if resolved_lock in _HELD_LOCKS:
+        raise WorkspaceLockedError("workspace mutation is already in progress")
+    descriptor = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        descriptor = os.open(
-            str(lock_path),
-            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-            0o600,
-        )
-    except FileExistsError as exc:
-        raise WorkspaceLockedError("workspace mutation is already in progress") from exc
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        os.close(descriptor)
+        if exc.errno in (errno.EACCES, errno.EAGAIN):
+            raise WorkspaceLockedError("workspace mutation is already in progress") from exc
+        raise
+    _HELD_LOCKS.add(resolved_lock)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write("locked\n")
-            stream.flush()
-            os.fsync(stream.fileno())
+        os.ftruncate(descriptor, 0)
+        os.write(descriptor, f"pid={os.getpid()}\n".encode("ascii"))
+        os.fsync(descriptor)
         _fsync_directory(workspace.state)
+        _recover_all_pending_mutations_locked(workspace)
         yield
     finally:
-        lock_path.unlink(missing_ok=True)
-        _fsync_directory(workspace.state)
+        _HELD_LOCKS.discard(resolved_lock)
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
 
 
 def _allocate_job_id_locked(workspace: WorkspacePaths) -> str:
@@ -302,6 +321,12 @@ def _canonical_job_dir(workspace: WorkspacePaths, job_id: str) -> Path:
 
 def read_job(workspace: WorkspacePaths, job_id: str) -> dict[str, object]:
     job_dir = _canonical_job_dir(workspace, job_id)
+    if (job_dir / "working" / _PENDING_MUTATION).exists():
+        raise JobStoreError("canonical job has a pending mutation")
+    return _read_valid_job(job_dir, job_id)
+
+
+def _read_valid_job(job_dir: Path, job_id: str) -> dict[str, object]:
     try:
         record = load_json(job_dir / "job.json")
     except (FileNotFoundError, json.JSONDecodeError, ValueError) as exc:
@@ -317,6 +342,164 @@ def read_job(workspace: WorkspacePaths, job_id: str) -> dict[str, object]:
     if not (job_dir / "working").is_dir():
         raise JobStoreError("canonical job is missing working")
     return record
+
+
+def _recover_pending_mutation_locked(
+    workspace: WorkspacePaths,
+    job_id: str,
+) -> None:
+    job_dir = _canonical_job_dir(workspace, job_id)
+    pending_path = job_dir / "working" / _PENDING_MUTATION
+    if not pending_path.exists():
+        return
+    try:
+        journal = load_json(pending_path)
+        updated = journal["updated_job"]
+        event = journal["event"]
+        file_updates = journal.get("file_updates", {})
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise JobStoreError("pending canonical mutation is unreadable") from exc
+    if (
+        journal.get("schema_version") != 1
+        or journal.get("job_id") != job_id
+        or not isinstance(updated, Mapping)
+        or not isinstance(event, Mapping)
+        or not isinstance(file_updates, Mapping)
+        or updated.get("job_id") != job_id
+        or event.get("job_id") != job_id
+    ):
+        raise JobStoreError("pending canonical mutation is invalid")
+    if (
+        event.get("schema_version") != 1
+        or not isinstance(event.get("event_type"), str)
+        or not isinstance(event.get("occurred_at"), str)
+        or event.get("status") not in _STATUSES
+        or not isinstance(event.get("metadata"), Mapping)
+        or not set(file_updates).issubset({"posting.md", "assessment.md"})
+        or not all(
+            isinstance(value, str) and value.strip()
+            for value in file_updates.values()
+        )
+    ):
+        raise JobStoreError("pending canonical mutation is invalid")
+    errors = validate_document("job", updated)
+    if errors:
+        raise JobStoreError(f"pending canonical job is invalid: {errors[0].code}")
+    event_line = json.dumps(event, sort_keys=True, separators=(",", ":"))
+    events_path = job_dir / "events.jsonl"
+    prior_events = events_path.read_text(encoding="utf-8")
+    if event_line not in prior_events.splitlines():
+        atomic_write_text(events_path, prior_events + event_line + "\n")
+    for name, value in sorted(file_updates.items()):
+        atomic_write_text(job_dir / name, value)
+    atomic_write_json(job_dir / "job.json", dict(updated))
+    pending_path.unlink()
+    _fsync_directory(pending_path.parent)
+
+
+def _recover_all_pending_mutations_locked(workspace: WorkspacePaths) -> None:
+    if not workspace.jobs.is_dir():
+        return
+    for job_dir in sorted(workspace.jobs.iterdir(), key=lambda path: path.name):
+        if job_dir.is_dir() and _JOB_ID.fullmatch(job_dir.name):
+            _recover_pending_mutation_locked(workspace, job_dir.name)
+
+
+def _commit_job_mutation_locked(
+    workspace: WorkspacePaths,
+    job_id: str,
+    updated: Mapping[str, object],
+    event: Mapping[str, object],
+    file_updates: Mapping[str, str] | None = None,
+) -> None:
+    pending_path = workspace.jobs / job_id / "working" / _PENDING_MUTATION
+    atomic_write_json(
+        pending_path,
+        {
+            "schema_version": 1,
+            "job_id": job_id,
+            "updated_job": dict(updated),
+            "event": dict(event),
+            "file_updates": dict(file_updates or {}),
+        },
+    )
+    _recover_pending_mutation_locked(workspace, job_id)
+
+
+def reverify_job(
+    workspace: WorkspacePaths,
+    job_id: str,
+    candidate: CandidateJob,
+    assessment: JobAssessment,
+    *,
+    posting_markdown: str,
+    assessment_markdown: str,
+    occurred_at: str,
+) -> ReverificationResult:
+    if assessment.disposition not in {"strong_match", "worth_considering"}:
+        raise JobStoreError("only qualifying roles can update a canonical job")
+    if not occurred_at:
+        raise JobStoreError("occurred_at is required")
+    with workspace_lock(workspace):
+        current = read_job(workspace, job_id)
+        current_identity = (
+            requisition_identity(
+                str(current["employer"]),
+                str(current["requisition_id"]),
+            )
+            if current.get("requisition_id")
+            else fallback_identity(
+                str(current["employer"]),
+                str(current["title"]),
+                str(current["location"]) if current.get("location") else None,
+                str(current["team"]) if current.get("team") else None,
+            )
+        )
+        if candidate_key(candidate) != current_identity:
+            raise JobStoreError("reverification identity does not match canonical job")
+        if current.get("source") != candidate.source:
+            return ReverificationResult(current, ())
+        if current.get("raw_field_hash") == candidate.raw_field_hash:
+            return ReverificationResult(current, ())
+        updated = _build_record(job_id, candidate, assessment)
+        for field in (
+            "status",
+            "discovered_at",
+            "paths",
+            "application_versions",
+            "exports",
+        ):
+            updated[field] = current[field]
+        updated["reverified_at"] = occurred_at
+        changed_fields = tuple(
+            sorted(
+                field
+                for field, value in updated.items()
+                if field != "reverified_at" and current.get(field) != value
+            )
+        )
+        errors = validate_document("job", updated)
+        if errors:
+            raise JobStoreError(f"reverified job is invalid: {errors[0].code}")
+        event = _event(
+            job_id,
+            "job_reverified",
+            occurred_at,
+            prior_status=str(current["status"]),
+            status=str(current["status"]),
+            metadata={"changed_fields": list(changed_fields)},
+        )
+        _commit_job_mutation_locked(
+            workspace,
+            job_id,
+            updated,
+            event,
+            {
+                "posting.md": posting_markdown,
+                "assessment.md": assessment_markdown,
+            },
+        )
+        return ReverificationResult(read_job(workspace, job_id), changed_fields)
 
 
 def update_job_status(
@@ -341,23 +524,15 @@ def update_job_status(
         errors = validate_document("job", updated)
         if errors:
             raise JobStoreError(f"updated job is invalid: {errors[0].code}")
-        job_dir = workspace.jobs / job_id
-        events_path = job_dir / "events.jsonl"
-        prior_events = events_path.read_text(encoding="utf-8")
-        event_line = json.dumps(
-            _event(
-                job_id,
-                "status_changed",
-                occurred_at,
-                prior_status=prior_status,
-                status=status,
-                metadata=metadata,
-            ),
-            sort_keys=True,
-            separators=(",", ":"),
+        event = _event(
+            job_id,
+            "status_changed",
+            occurred_at,
+            prior_status=prior_status,
+            status=status,
+            metadata=metadata,
         )
-        atomic_write_json(job_dir / "job.json", updated)
-        atomic_write_text(events_path, prior_events + event_line + "\n")
+        _commit_job_mutation_locked(workspace, job_id, updated, event)
         return read_job(workspace, job_id)
 
 
@@ -416,23 +591,15 @@ def record_application_version(
         errors = validate_document("job", updated)
         if errors:
             raise JobStoreError(f"updated job is invalid: {errors[0].code}")
-        job_dir = workspace.jobs / job_id
-        events_path = job_dir / "events.jsonl"
-        prior_events = events_path.read_text(encoding="utf-8")
-        event_line = json.dumps(
-            _event(
-                job_id,
-                "packet_ready",
-                occurred_at,
-                prior_status=str(current["status"]),
-                status="packet_ready",
-                metadata={"version": version["version"]},
-            ),
-            sort_keys=True,
-            separators=(",", ":"),
+        event = _event(
+            job_id,
+            "packet_ready",
+            occurred_at,
+            prior_status=str(current["status"]),
+            status="packet_ready",
+            metadata={"version": version["version"]},
         )
-        atomic_write_json(job_dir / "job.json", updated)
-        atomic_write_text(events_path, prior_events + event_line + "\n")
+        _commit_job_mutation_locked(workspace, job_id, updated, event)
         return read_job(workspace, job_id)
 
 
@@ -480,24 +647,16 @@ def record_export_receipt(
         errors = validate_document("job", updated)
         if errors:
             raise JobStoreError(f"updated job is invalid: {errors[0].code}")
-        job_dir = workspace.jobs / job_id
-        events_path = job_dir / "events.jsonl"
-        prior_events = events_path.read_text(encoding="utf-8")
-        event_line = json.dumps(
-            _event(
-                job_id,
-                "export_verified",
-                str(receipt["exported_at"]),
-                prior_status=str(current["status"]),
-                status=str(current["status"]),
-                metadata={
-                    "destination_kind": receipt["destination_kind"],
-                    "content_hash": content_hash,
-                },
-            ),
-            sort_keys=True,
-            separators=(",", ":"),
+        event = _event(
+            job_id,
+            "export_verified",
+            str(receipt["exported_at"]),
+            prior_status=str(current["status"]),
+            status=str(current["status"]),
+            metadata={
+                "destination_kind": receipt["destination_kind"],
+                "content_hash": content_hash,
+            },
         )
-        atomic_write_json(job_dir / "job.json", updated)
-        atomic_write_text(events_path, prior_events + event_line + "\n")
+        _commit_job_mutation_locked(workspace, job_id, updated, event)
         return read_job(workspace, job_id)

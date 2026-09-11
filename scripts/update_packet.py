@@ -15,7 +15,7 @@ from career_pipeline.packets import (
     advance_packet,
     complete_local_delivery,
     load_manifest,
-    save_manifest,
+    persist_manifest,
 )
 from career_pipeline.workspace import create_workspace
 
@@ -55,7 +55,7 @@ def main() -> int:
             parser.error("--receipt is required for this stage")
         receipt = json.loads(args.receipt.read_text(encoding="utf-8"))
         updated = advance_packet(manifest, args.job_id, args.stage, receipt)
-    save_manifest(manifest_path, updated)
+        updated = persist_manifest(workspace, updated)
     print(f"{args.job_id} advanced to {updated.packets[args.job_id][-1].stage}")
     return 0
 

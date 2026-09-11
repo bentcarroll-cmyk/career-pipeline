@@ -21,6 +21,7 @@ class LifecycleCandidate:
     employer: str
     title: str
     requisition_id: str | None
+    status: str = "new"
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,24 @@ _EVENT_STATUS = {
 _LIFECYCLE_SOURCES = {"gmail", "google-calendar"}
 _JOB_ID = re.compile(r"JOB-[0-9]{6}")
 _SPACE = re.compile(r"\s+")
+_ALLOWED_TRANSITIONS = {
+    "applied": {
+        "new",
+        "needs_confirmation",
+        "prepare_application",
+        "packet_ready",
+    },
+    "interviewing": {"prepare_application", "packet_ready", "applied"},
+    "offer": {"interviewing"},
+    "closed": {
+        "new",
+        "needs_confirmation",
+        "prepare_application",
+        "packet_ready",
+        "applied",
+        "interviewing",
+    },
+}
 
 
 def _normalize(value: str | None) -> str:
@@ -114,10 +133,21 @@ def classify_lifecycle_evidence(
     if len(matches) != 1:
         return LifecycleDecision("needs_review", reason="exact_role_match_required")
     match = matches[0]
+    target_status = _EVENT_STATUS[evidence.event_class]
+    if (
+        match.status != target_status
+        and match.status not in _ALLOWED_TRANSITIONS[target_status]
+    ):
+        return LifecycleDecision(
+            "needs_review",
+            job_id=match.job_id,
+            target_status=target_status,
+            reason="status_transition_requires_review",
+        )
     return LifecycleDecision(
         "apply_update",
         job_id=match.job_id,
-        target_status=_EVENT_STATUS[evidence.event_class],
+        target_status=target_status,
         reason="exact_unambiguous_evidence",
     )
 
@@ -154,6 +184,7 @@ def _candidates(workspace: WorkspacePaths) -> tuple[LifecycleCandidate, ...]:
                     if record.get("requisition_id")
                     else None
                 ),
+                status=str(record["status"]),
             )
         )
     return tuple(candidates)

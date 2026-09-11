@@ -14,7 +14,6 @@ from career_pipeline.packets import (
     ApplicationManifest,
     PacketOptions,
     load_manifest,
-    save_manifest,
     start_packet,
 )
 from career_pipeline.workspace import create_workspace
@@ -43,7 +42,6 @@ def main() -> int:
         occurred_at=args.occurred_at,
         explicit_request=args.explicit_request,
     )
-    save_manifest(manifest_path, manifest)
     print(f"{record.job_id} {record.version} {record.stage}")
     return 0
 

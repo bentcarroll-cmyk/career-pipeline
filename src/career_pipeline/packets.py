@@ -94,6 +94,55 @@ def _latest(manifest: ApplicationManifest, job_id: str) -> PacketRecord | None:
     return records[-1] if records else None
 
 
+def _record_signature(record: PacketRecord) -> tuple[object, ...]:
+    return (
+        record.job_id,
+        record.employer,
+        record.title,
+        record.version,
+        record.version_dir,
+        record.resume_pdf,
+        record.cover_letter_pdf,
+        record.working_dir,
+        record.profile_hash,
+    )
+
+
+def _merge_manifests(
+    stored: ApplicationManifest,
+    incoming: ApplicationManifest,
+) -> ApplicationManifest:
+    if stored.schema_version != incoming.schema_version:
+        raise InvalidPacketTransition("manifest schema versions conflict")
+    packets: dict[str, tuple[PacketRecord, ...]] = {}
+    for job_id in sorted(set(stored.packets) | set(incoming.packets)):
+        by_version: dict[str, PacketRecord] = {}
+        for record in (*stored.packets.get(job_id, ()), *incoming.packets.get(job_id, ())):
+            existing = by_version.get(record.version)
+            if existing is None or existing == record:
+                by_version[record.version] = record
+                continue
+            if _record_signature(existing) != _record_signature(record):
+                raise InvalidPacketTransition("packet version reservation conflicts")
+            existing_index = STAGES.index(existing.stage)
+            record_index = STAGES.index(record.stage)
+            lower, higher = (
+                (existing, record)
+                if existing_index <= record_index
+                else (record, existing)
+            )
+            if any(
+                dict(higher.receipts.get(stage, {})) != dict(receipt)
+                for stage, receipt in lower.receipts.items()
+            ):
+                raise InvalidPacketTransition("packet receipt history conflicts")
+            if existing_index == record_index and existing != record:
+                raise InvalidPacketTransition("packet stage state conflicts")
+            by_version[record.version] = higher
+        packets[job_id] = tuple(by_version[name] for name in sorted(by_version))
+    return ApplicationManifest(schema_version=stored.schema_version, packets=packets)
+
+
 def _resolve(workspace: WorkspacePaths, relative: Path) -> Path:
     pure = PurePosixPath(relative.as_posix())
     if pure.is_absolute() or ".." in pure.parts:
@@ -104,6 +153,30 @@ def _resolve(workspace: WorkspacePaths, relative: Path) -> Path:
     except ValueError as exc:
         raise InvalidPacketTransition("packet path escapes the workspace") from exc
     return resolved
+
+
+def _ensure_packet_directories(
+    workspace: WorkspacePaths,
+    record: PacketRecord,
+) -> None:
+    _resolve(workspace, record.version_dir).mkdir(parents=True, exist_ok=True)
+    _resolve(workspace, record.working_dir).mkdir(parents=True, exist_ok=True)
+
+
+def persist_manifest(
+    workspace: WorkspacePaths,
+    manifest: ApplicationManifest,
+) -> ApplicationManifest:
+    manifest_path = workspace.state / "application-manifest.json"
+    with workspace_lock(workspace):
+        stored = (
+            load_manifest(manifest_path)
+            if manifest_path.exists()
+            else ApplicationManifest()
+        )
+        merged = _merge_manifests(stored, manifest)
+        save_manifest(manifest_path, merged)
+        return merged
 
 
 def start_packet(
@@ -117,61 +190,73 @@ def start_packet(
 ) -> tuple[ApplicationManifest, PacketRecord]:
     if not explicit_request:
         raise InvalidPacketTransition("packet preparation requires an explicit request")
-    try:
-        job = read_job(workspace, job_id)
-    except JobStoreError as exc:
-        raise InvalidPacketTransition("packet job must exist in the canonical store") from exc
     if not occurred_at:
         raise InvalidPacketTransition("occurred_at is required")
-    update_job_status(
-        workspace,
-        job_id,
-        "prepare_application",
-        occurred_at=occurred_at,
-    )
-    current = _latest(manifest, job_id)
-    if current is not None and current.stage != "ready":
-        return manifest, current
-
-    employer = _safe_component(str(job["employer"]))
-    title = _safe_component(str(job["title"]))
-    application_dir = Path("Applications") / f"{job_id}_{employer}_{title}"
-    actual_application_dir = _resolve(workspace, application_dir)
+    try:
+        update_job_status(
+            workspace,
+            job_id,
+            "prepare_application",
+            occurred_at=occurred_at,
+        )
+    except JobStoreError as exc:
+        raise InvalidPacketTransition("packet job must exist in the canonical store") from exc
+    manifest_path = workspace.state / "application-manifest.json"
     with workspace_lock(workspace):
+        stored = (
+            load_manifest(manifest_path)
+            if manifest_path.exists()
+            else ApplicationManifest()
+        )
+        manifest = _merge_manifests(stored, manifest)
+        current = _latest(manifest, job_id)
+        if current is not None and current.stage != "ready":
+            save_manifest(manifest_path, manifest)
+            _ensure_packet_directories(workspace, current)
+            return manifest, current
+        job = read_job(workspace, job_id)
+        employer = _safe_component(str(job["employer"]))
+        title = _safe_component(str(job["title"]))
+        application_dir = Path("Applications") / f"{job_id}_{employer}_{title}"
+        actual_application_dir = _resolve(workspace, application_dir)
         actual_application_dir.mkdir(parents=True, exist_ok=True)
         versions = [
             int(name[1:])
             for name in (path.name for path in actual_application_dir.iterdir())
             if re.fullmatch(r"v[0-9]{3}", name)
         ]
+        versions.extend(
+            int(record.version[1:])
+            for record in manifest.packets.get(job_id, ())
+            if re.fullmatch(r"v[0-9]{3}", record.version)
+        )
         number = max(versions, default=0) + 1
         version = f"v{number:03d}"
         version_dir = application_dir / version
-        actual_version_dir = _resolve(workspace, version_dir)
-        actual_version_dir.mkdir()
         working_dir = version_dir / "working"
-        _resolve(workspace, working_dir).mkdir()
-
-    resume_pdf = version_dir / f"Resume_{employer}_{title}.pdf"
-    cover_letter_pdf = (
-        version_dir / f"Cover_Letter_{employer}_{title}.pdf"
-        if options.cover_letter_enabled
-        else None
-    )
-    record = PacketRecord(
-        job_id=job_id,
-        employer=str(job["employer"]),
-        title=str(job["title"]),
-        version=version,
-        version_dir=version_dir,
-        resume_pdf=resume_pdf,
-        cover_letter_pdf=cover_letter_pdf,
-        working_dir=working_dir,
-        profile_hash=options.profile_hash,
-    )
-    packets = dict(manifest.packets)
-    packets[job_id] = (*packets.get(job_id, ()), record)
-    return replace(manifest, packets=packets), record
+        resume_pdf = version_dir / f"Resume_{employer}_{title}.pdf"
+        cover_letter_pdf = (
+            version_dir / f"Cover_Letter_{employer}_{title}.pdf"
+            if options.cover_letter_enabled
+            else None
+        )
+        record = PacketRecord(
+            job_id=job_id,
+            employer=str(job["employer"]),
+            title=str(job["title"]),
+            version=version,
+            version_dir=version_dir,
+            resume_pdf=resume_pdf,
+            cover_letter_pdf=cover_letter_pdf,
+            working_dir=working_dir,
+            profile_hash=options.profile_hash,
+        )
+        packets = dict(manifest.packets)
+        packets[job_id] = (*packets.get(job_id, ()), record)
+        manifest = replace(manifest, packets=packets)
+        save_manifest(manifest_path, manifest)
+        _ensure_packet_directories(workspace, record)
+        return manifest, record
 
 
 def advance_packet(
@@ -344,12 +429,13 @@ def complete_local_delivery(
         occurred_at=occurred_at,
     )
     load_indexes(workspace)
-    return advance_packet(
+    completed = advance_packet(
         manifest,
         job_id,
         "ready",
         {"packet_ready": True, "canonical_job_id": job_id},
     )
+    return persist_manifest(workspace, completed)
 
 
 def _record_to_json(record: PacketRecord) -> dict[str, object]:

@@ -1,14 +1,37 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 from career_pipeline.checkpoints import (
     DiscoveryState,
     SourceCheckpoint,
     SourceResult,
     complete_source,
+    load_discovery_state,
+    save_discovery_state,
 )
 
 
 class CheckpointTests(unittest.TestCase):
+    def test_discovery_state_round_trips_all_source_and_local_identity_state(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "discovery-state.json"
+            state = DiscoveryState(
+                sources={
+                    "public-search": SourceCheckpoint(
+                        "2026-09-11T12:00:00Z",
+                        ("synthetic-record",),
+                        "synthetic-cursor",
+                    )
+                },
+                stable_review_batch="a" * 64,
+                canonical_jobs={"req:example:syn-1": "JOB-000001"},
+            )
+
+            save_discovery_state(path, state)
+
+            self.assertEqual(load_discovery_state(path), state)
+
     def test_failed_source_does_not_advance_checkpoint(self) -> None:
         before = DiscoveryState(
             sources={
