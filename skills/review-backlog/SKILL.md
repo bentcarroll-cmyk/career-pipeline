@@ -1,17 +1,17 @@
 ---
 name: review-backlog
-description: Compare and manage the user's existing Career Pipeline backlog in Linear without submitting applications.
+description: Use when a user asks to summarize, compare, filter, or update opportunities already recorded by Career Pipeline.
 ---
 
 # Review backlog
 
-Help the user understand and manage opportunities already reviewed into the configured Linear project. Read [backlog actions](references/backlog-actions.md) before mutating Linear.
+Help the user understand and manage the canonical local opportunity backlog. Read [backlog actions](references/backlog-actions.md) before changing state.
 
 ## Workflow
 
-1. Verify the configured Linear project and read current issues, including requested closed or archived records.
-2. Summarize new roles, compare selected tickets on the stored assessment evidence, or surface deadlines without reclassifying roles from title alone.
-3. Record explicit not-pursuing or lifecycle decisions and read the changed issue back.
-4. When the user explicitly selects one or more exact ticket IDs for materials, build a packet selection with any per-role instructions and invoke Prepare application immediately in this same conversation.
+1. Resolve the configured workspace and validate or regenerate `Indexes/backlog.json` from canonical `Jobs/` folders.
+2. Summarize new roles, compare exact local job IDs using stored assessment evidence, or surface deadlines without reclassifying from title alone.
+3. For an explicit not-pursuing or lifecycle decision, update the exact `job.json`, append an event, read both back, and regenerate affected indexes.
+4. When the user explicitly selects one or more exact local job IDs for materials, validate every canonical folder, preserve order and per-role instructions, and invoke Prepare application immediately in the same conversation.
 
-A `Prepare application` label records durable state but does not wake Codex. Never claim an application was submitted and never send employer-facing communication.
+A local `prepare_application` status records durable progress but does not wake Codex. Never claim an application was submitted and never send employer-facing communication.

@@ -59,11 +59,62 @@ class PluginManifestTests(unittest.TestCase):
     def test_prepare_skill_has_quality_and_delivery_guidance(self) -> None:
         skill_root = ROOT / "skills" / "prepare-application"
         skill_text = (skill_root / "SKILL.md").read_text(encoding="utf-8")
-        expected = {"tailoring.md", "quality-gates.md", "linear-delivery.md"}
+        expected = {
+            "tailoring.md",
+            "quality-gates.md",
+            "local-delivery-and-optional-export.md",
+        }
         self.assertTrue((skill_root / "agents" / "openai.yaml").is_file())
         for name in expected:
             self.assertTrue((skill_root / "references" / name).is_file())
             self.assertIn(f"references/{name}", skill_text)
+        self.assertFalse((skill_root / "references" / "linear-delivery.md").exists())
+
+    def test_skill_descriptions_are_trigger_conditions(self) -> None:
+        for path in (ROOT / "skills").glob("*/SKILL.md"):
+            text = path.read_text(encoding="utf-8")
+            description = next(
+                line for line in text.splitlines() if line.startswith("description:")
+            )
+            self.assertTrue(
+                description.startswith("description: Use when"),
+                f"{path.parent.name} description must state when to use it",
+            )
+
+    def test_operational_instructions_make_local_folders_authoritative(self) -> None:
+        onboard = (ROOT / "skills" / "onboard" / "SKILL.md").read_text()
+        discover = (ROOT / "skills" / "discover-jobs" / "SKILL.md").read_text()
+        review = (ROOT / "skills" / "review-backlog" / "SKILL.md").read_text()
+        prepare = (ROOT / "skills" / "prepare-application" / "SKILL.md").read_text()
+
+        self.assertIn("Every connector is optional", onboard)
+        self.assertIn("Jobs/", discover)
+        self.assertIn("Indexes/", discover)
+        self.assertIn("canonical local", review)
+        self.assertIn("Begin work immediately", prepare)
+        self.assertIn("Never schedule", prepare)
+        self.assertFalse(
+            (ROOT / "skills" / "discover-jobs" / "assets" / "Linear_Issue.template.md").exists()
+        )
+
+    def test_no_instruction_retains_linear_as_a_core_workflow(self) -> None:
+        text = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (ROOT / "skills").rglob("*")
+            if path.is_file() and path.suffix in {".md", ".yaml"}
+        )
+        forbidden = (
+            "Linear is required",
+            "Required Linear setup",
+            "configured Linear destination",
+            "Linear backlog",
+            "update an exact Linear ticket",
+            "exact Linear ticket",
+            "Linear delivery",
+        )
+        for phrase in forbidden:
+            self.assertNotIn(phrase, text)
+        self.assertIn("optional export", text.lower())
 
 
 if __name__ == "__main__":

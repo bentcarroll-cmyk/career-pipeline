@@ -1,29 +1,21 @@
-# Evaluation and Linear delivery
+# Evaluation and canonical delivery
 
 ## Assessment
 
-Evaluate the actual responsibilities before considering title similarity. Record:
+Evaluate verified responsibilities before title similarity. Record role-to-profile fit, evidence-supported strengths, gaps, uncertainties, compensation evidence, geography, workplace model, travel, recency, posting status, deadline, and a Strong Match, Worth Considering, or non-match disposition.
 
-- role-to-profile fit;
-- evidence-supported strengths with approved evidence IDs;
-- missing qualifications and uncertainties;
-- compensation evidence;
-- geography, workplace model, and travel;
-- recency, posting status, and deadline;
-- Strong Match, Worth Considering, or non-match disposition.
-
-Never turn an unknown into a favorable assumption. A qualifying assessment must have at least one evidence-supported strength. Keep clear non-matches in local run evidence only.
+Never turn an unknown into a favorable assumption. A qualifying assessment requires at least one strength tied to an approved evidence ID. Keep clear non-matches in run evidence only.
 
 ## Duplicate order
 
-1. Match normalized employer plus ATS/requisition identity.
-2. If absent, compare the conservative employer, exact title, location, and team fingerprint.
-3. Include archived, closed, and not-pursuing Linear records in the baseline.
-4. Treat a changed or reposted requisition as new only when the stable identity or material posting evidence supports that conclusion.
-5. Search Linear once more immediately before creating an issue.
+1. Match normalized employer plus ATS or requisition identity.
+2. When that identity is absent, use the conservative employer, exact title, location, and team fingerprint.
+3. Include every canonical job status, including closed and not pursuing.
+4. Treat a changed or reposted requisition as new only when stable identity or material posting evidence supports it.
+5. Repeat the check against canonical folders while holding the workspace lock immediately before allocation.
 
-## Required issue content
+## Canonical record creation
 
-Include employer, exact title, location, workplace model, travel, compensation evidence, posting/application URLs, requisition identity, source, verification time, disposition, fit, strengths, gaps, uncertainties, deadline, next action, and discovery/re-verification dates.
+Create `Jobs/JOB-000123/` with validated `job.json`, normalized `posting.md`, evidence-backed `assessment.md`, append-only `events.jsonl`, and private `working/`. Persist relative paths. Increment the ID counter before folder creation so an interrupted allocation is never reused.
 
-After creation, read the issue back. Verify workspace, team, project, title, labels, description hash, and exact URLs. Only then record delivery and advance state.
+Read the complete folder back, then regenerate indexes atomically. Index failure is repairable; it never makes an index authoritative over the canonical folder.

@@ -1,31 +1,31 @@
 ---
 name: discover-jobs
-description: Find, verify, assess, deduplicate, and deliver qualifying current roles to the user's configured Linear project.
+description: Use when a user or approved discovery schedule asks to find, verify, assess, deduplicate, or record current job opportunities.
 ---
 
 # Discover jobs
 
-Find, verify, assess, deduplicate, and record current opportunities. This skill may run manually or from the approved discovery automation.
+Find and assess current opportunities, then persist qualifying roles in canonical local folders.
 
 ## Preconditions
 
-1. Resolve the workspace from persisted configuration; never guess a path.
-2. Require current approved hashes for `Career_Profile.md` and `Search_Criteria.md`.
-3. Run readiness for the configured Linear workspace, team, project, labels, and write/readback actions.
-4. Load `State/discovery-state.json` and create a run folder under `Runs/discovery/`.
+1. Resolve the workspace from persisted configuration. Never guess a path.
+2. Require current approved hashes for `Profile/Career_Profile.md` and `Profile/Search_Criteria.md`.
+3. Run local readiness and ensure at least one configured discovery lane is usable.
+4. Load `State/discovery-state.json`, validate or rebuild `Indexes/` from `Jobs/`, and create run evidence under `Runs/discovery/`.
 
-If any precondition fails, do not advance source state or create an issue.
+If a precondition fails, do not advance source state or allocate a job ID.
 
 ## Workflow
 
-1. Search Linear for a duplicate baseline that includes archived and closed records.
-2. Read [source routing](references/source-routing.md), then search only enabled sources whose required actions are currently available.
-3. Save a minimal source receipt and normalize each retrieved snapshot with the matching deterministic adapter.
-4. Verify the original posting and actual application destination where possible. Preserve uncertainty rather than guessing.
-5. Read [evaluation and delivery](references/evaluation-and-delivery.md). Evaluate responsibilities before title, and validate every positive fit claim against an approved profile evidence ID.
-6. Deduplicate by employer plus ATS/requisition identity; use the conservative employer/title/location/team fingerprint only when no stable identity exists.
-7. Keep clear non-matches in local run evidence. For every new Strong Match or Worth Considering role, search Linear again immediately before creation.
-8. Create the issue, read it back, and record delivery only after the destination, labels, body, and URLs match.
-9. Atomically advance only successful source checkpoints and the stable review batch.
+1. Read [source routing](references/source-routing.md). Search only enabled sources with currently observed required actions.
+2. Save a minimal source receipt and normalize each retrieved snapshot with its deterministic adapter.
+3. Verify the original posting and actual application destination where possible. Preserve uncertainty.
+4. Read [evaluation and canonical delivery](references/evaluation-and-delivery.md). Evaluate responsibilities before title and validate positive fit claims against approved profile evidence IDs.
+5. Deduplicate against canonical folders: employer plus ATS or requisition identity first, otherwise the conservative employer, title, location, and team fingerprint.
+6. Keep clear non-matches in run evidence without allocating IDs.
+7. For each novel Strong Match or Worth Considering role, acquire the workspace lock, repeat the duplicate check, allocate the next local ID, and create the complete `Jobs/JOB-000123/` folder.
+8. Read `job.json` and required evidence files back before success. Regenerate `Indexes/backlog.json` and `Indexes/deduplication.json` from canonical folders.
+9. Advance only successful source checkpoints and save the stable batch of new local IDs.
 
-Report new matches, meaningful changes, or newly actionable failures. Stay quiet when there is no new or materially changed actionable result, including a failure already reported unchanged.
+Report new matches, meaningful changes, or newly actionable failures. Stay quiet when nothing materially changed, including a failure already reported unchanged. Connector export is outside this workflow and requires a separate explicit request.
