@@ -1,0 +1,20 @@
+{
+  "name": "career-pipeline-private-beta",
+  "interface": {
+    "displayName": "Career Pipeline Private Beta"
+  },
+  "plugins": [
+    {
+      "name": "career-pipeline",
+      "source": {
+        "source": "url",
+        "url": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

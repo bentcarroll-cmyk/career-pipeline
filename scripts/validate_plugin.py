@@ -5,8 +5,12 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 import sys
+import tempfile
+import zipfile
 from pathlib import Path
+from pathlib import PurePosixPath
 
 
 SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
@@ -66,9 +70,37 @@ def validate_manifest(root: Path) -> list[str]:
     return errors
 
 
+def validate_target(target: Path) -> list[str]:
+    if target.is_dir():
+        return validate_manifest(target)
+    if not target.is_file() or not zipfile.is_zipfile(target):
+        return ["plugin target must be a directory or ZIP archive"]
+    with zipfile.ZipFile(target) as bundle:
+        seen: set[str] = set()
+        for info in bundle.infolist():
+            name = info.filename
+            member = PurePosixPath(name)
+            mode = info.external_attr >> 16
+            if (
+                not name
+                or "\\" in name
+                or member.is_absolute()
+                or ".." in member.parts
+            ):
+                return [f"unsafe archive member: {name}"]
+            if name in seen:
+                return [f"duplicate archive member: {name}"]
+            if stat.S_ISLNK(mode):
+                return [f"archive member must not be a symlink: {name}"]
+            seen.add(name)
+        with tempfile.TemporaryDirectory() as raw:
+            bundle.extractall(raw)
+            return validate_manifest(Path(raw))
+
+
 def main(argv: list[str]) -> int:
-    root = Path(argv[1]).resolve() if len(argv) == 2 else Path(__file__).resolve().parents[1]
-    errors = validate_manifest(root)
+    target = Path(argv[1]).resolve() if len(argv) == 2 else Path(__file__).resolve().parents[1]
+    errors = validate_target(target)
     for error in errors:
         print(error)
     if errors:

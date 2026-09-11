@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "Career Pipeline",
     "shortDescription": "Run a private, local-first career search.",
-    "longDescription": "Onboard privately, discover qualified roles, manage a Linear backlog, and prepare verified application packets on request.",
+    "longDescription": "Onboard privately, discover qualified roles, manage a local backlog, and prepare verified application packets on request.",
     "developerName": "Career Pipeline",
     "category": "Productivity",
     "capabilities": [

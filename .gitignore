@@ -20,6 +20,8 @@ build/
 user-workspaces/
 Career-Workspace/
 **/Applications/
+**/Jobs/
+**/Indexes/
 **/Profile/
 **/Sources/
 **/Runs/
