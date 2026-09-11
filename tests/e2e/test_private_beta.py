@@ -409,7 +409,11 @@ class PrivateBetaTests(unittest.TestCase):
             self.assertEqual(clear.decision.action, "apply_update")
             self.assertEqual(ambiguous.decision.action, "needs_review")
             self.assertEqual(read_job(workspace, "JOB-000001")["status"], "applied")
-            self.assertEqual(read_job(workspace, "JOB-000002")["status"], "packet_ready")
+            self.assertEqual(read_job(workspace, "JOB-000002")["status"], "not_pursuing")
+            self.assertEqual(
+                read_job(workspace, "JOB-000002")["application_versions"][0]["version"],
+                "v001",
+            )
 
             export_payload = build_linear_export_payload(
                 workspace,

@@ -14,9 +14,8 @@ sys.path.insert(0, str(ROOT / "src"))
 from career_pipeline.checkpoints import (
     DiscoveryState,
     SourceResult,
-    complete_source,
     load_discovery_state,
-    save_discovery_state,
+    merge_discovery_state,
 )
 from career_pipeline.discovery import ReviewedJob, deliver_reviewed_jobs
 from career_pipeline.evaluation import EvidenceClaim, JobAssessment
@@ -90,10 +89,11 @@ def main() -> int:
         _reviewed(args.reviewed),
         occurred_at=args.occurred_at,
     )
-    state = outcome.state
-    for source, result in _source_results(args.reviewed):
-        state = complete_source(state, source, result)
-    save_discovery_state(state_path, state)
+    state = merge_discovery_state(
+        workspace,
+        outcome.state,
+        _source_results(args.reviewed),
+    )
     print(
         json.dumps(
             {

@@ -16,7 +16,6 @@ from .indexes import load_indexes, rebuild_indexes
 from .job_store import (
     DuplicateJobError,
     create_job,
-    read_job,
     reverify_job,
     workspace_lock,
 )
@@ -82,19 +81,17 @@ def deliver_reviewed_jobs(
             if isinstance(matched, list) and len(matched) == 1:
                 job_id = str(matched[0])
                 canonical_jobs[key] = job_id
-                existing = read_job(workspace, job_id)
-                if existing.get("source") == item.candidate.source:
-                    result = reverify_job(
-                        workspace,
-                        job_id,
-                        item.candidate,
-                        item.assessment,
-                        posting_markdown=item.posting_markdown,
-                        assessment_markdown=item.assessment_markdown,
-                        occurred_at=occurred_at,
-                    )
-                    if result.changed:
-                        meaningful_changes.append(job_id)
+                result = reverify_job(
+                    workspace,
+                    job_id,
+                    item.candidate,
+                    item.assessment,
+                    posting_markdown=item.posting_markdown,
+                    assessment_markdown=item.assessment_markdown,
+                    occurred_at=occurred_at,
+                )
+                if result.changed:
+                    meaningful_changes.append(job_id)
             continue
         try:
             record = create_job(
@@ -110,19 +107,17 @@ def deliver_reviewed_jobs(
             if len(exc.job_ids) == 1:
                 job_id = exc.job_ids[0]
                 canonical_jobs[key] = job_id
-                existing = read_job(workspace, job_id)
-                if existing.get("source") == item.candidate.source:
-                    result = reverify_job(
-                        workspace,
-                        job_id,
-                        item.candidate,
-                        item.assessment,
-                        posting_markdown=item.posting_markdown,
-                        assessment_markdown=item.assessment_markdown,
-                        occurred_at=occurred_at,
-                    )
-                    if result.changed:
-                        meaningful_changes.append(job_id)
+                result = reverify_job(
+                    workspace,
+                    job_id,
+                    item.candidate,
+                    item.assessment,
+                    posting_markdown=item.posting_markdown,
+                    assessment_markdown=item.assessment_markdown,
+                    occurred_at=occurred_at,
+                )
+                if result.changed:
+                    meaningful_changes.append(job_id)
             continue
         job_id = str(record["job_id"])
         created.append(job_id)

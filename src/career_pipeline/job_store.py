@@ -60,6 +60,21 @@ _STATUSES = {
 }
 _HELD_LOCKS: set[Path] = set()
 _PENDING_MUTATION = "pending-mutation.json"
+_PRE_APPLICATION_STATUSES = frozenset(
+    {"new", "needs_confirmation", "prepare_application", "packet_ready"}
+)
+_SOURCE_PRIORITY = {
+    "public-search": 10,
+    "browser": 10,
+    "firecrawl": 10,
+    "indeed": 20,
+    "linkedin": 20,
+    "public_ats": 30,
+    "greenhouse": 30,
+    "lever": 30,
+    "ashby": 30,
+    "usajobs": 30,
+}
 
 
 def _fsync_directory(path: Path) -> None:
@@ -457,25 +472,47 @@ def reverify_job(
         )
         if candidate_key(candidate) != current_identity:
             raise JobStoreError("reverification identity does not match canonical job")
-        if current.get("source") != candidate.source:
-            return ReverificationResult(current, ())
-        if current.get("raw_field_hash") == candidate.raw_field_hash:
-            return ReverificationResult(current, ())
-        updated = _build_record(job_id, candidate, assessment)
-        for field in (
-            "status",
-            "discovered_at",
-            "paths",
-            "application_versions",
-            "exports",
-        ):
-            updated[field] = current[field]
+        same_source = current.get("source") == candidate.source
+        same_content = current.get("raw_field_hash") == candidate.raw_field_hash
+        exact_requisition = bool(
+            current.get("requisition_id")
+            and candidate.requisition_id
+            and requisition_identity(
+                str(current["employer"]),
+                str(current["requisition_id"]),
+            )
+            == requisition_identity(candidate.employer, candidate.requisition_id)
+        )
+        stronger_source = _SOURCE_PRIORITY.get(candidate.source, 0) > _SOURCE_PRIORITY.get(
+            str(current.get("source", "")), 0
+        )
+        replace_evidence = (same_source and not same_content) or (
+            not same_source and exact_requisition and stronger_source
+        )
+        if replace_evidence:
+            updated = _build_record(job_id, candidate, assessment)
+            for field in (
+                "status",
+                "discovered_at",
+                "paths",
+                "application_versions",
+                "exports",
+            ):
+                updated[field] = current[field]
+            file_updates = {
+                "posting.md": posting_markdown,
+                "assessment.md": assessment_markdown,
+            }
+        else:
+            updated = dict(current)
+            file_updates = None
         updated["reverified_at"] = occurred_at
         changed_fields = tuple(
             sorted(
                 field
                 for field, value in updated.items()
-                if field != "reverified_at" and current.get(field) != value
+                if field not in {"reverified_at", "verified_at"}
+                and current.get(field) != value
             )
         )
         errors = validate_document("job", updated)
@@ -487,17 +524,17 @@ def reverify_job(
             occurred_at,
             prior_status=str(current["status"]),
             status=str(current["status"]),
-            metadata={"changed_fields": list(changed_fields)},
+            metadata={
+                "changed_fields": list(changed_fields),
+                "verification_source": candidate.source,
+            },
         )
         _commit_job_mutation_locked(
             workspace,
             job_id,
             updated,
             event,
-            {
-                "posting.md": posting_markdown,
-                "assessment.md": assessment_markdown,
-            },
+            file_updates,
         )
         return ReverificationResult(read_job(workspace, job_id), changed_fields)
 
@@ -509,6 +546,7 @@ def update_job_status(
     *,
     occurred_at: str,
     metadata: Mapping[str, object] | None = None,
+    allowed_prior_statuses: frozenset[str] | None = None,
 ) -> dict[str, object]:
     if status not in _STATUSES:
         raise JobStoreError("unsupported job status")
@@ -518,6 +556,11 @@ def update_job_status(
         current = read_job(workspace, job_id)
         prior_status = str(current["status"])
         if prior_status == status:
+            return current
+        if (
+            allowed_prior_statuses is not None
+            and prior_status not in allowed_prior_statuses
+        ):
             return current
         updated = dict(current)
         updated["status"] = status
@@ -583,20 +626,26 @@ def record_application_version(
             raise JobStoreError("application version conflicts with canonical history")
         if not same_number:
             versions.append(dict(version))
-        if same_number and current["status"] == "packet_ready":
+        if same_number:
             return current
         updated = dict(current)
         updated["application_versions"] = versions
-        updated["status"] = "packet_ready"
+        prior_status = str(current["status"])
+        status = (
+            "packet_ready"
+            if prior_status in _PRE_APPLICATION_STATUSES
+            else prior_status
+        )
+        updated["status"] = status
         errors = validate_document("job", updated)
         if errors:
             raise JobStoreError(f"updated job is invalid: {errors[0].code}")
         event = _event(
             job_id,
-            "packet_ready",
+            "packet_ready" if status == "packet_ready" else "application_version_recorded",
             occurred_at,
-            prior_status=str(current["status"]),
-            status="packet_ready",
+            prior_status=prior_status,
+            status=status,
             metadata={"version": version["version"]},
         )
         _commit_job_mutation_locked(workspace, job_id, updated, event)

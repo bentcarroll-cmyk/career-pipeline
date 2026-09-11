@@ -61,6 +61,29 @@ def reviewed(number: int, disposition: str = "strong_match") -> ReviewedJob:
 
 
 class DiscoveryDeliveryTests(unittest.TestCase):
+    def test_unchanged_success_refreshes_reverification_without_change_alert(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            first = deliver_reviewed_jobs(
+                workspace,
+                DiscoveryState(),
+                (reviewed(799),),
+                occurred_at="2026-09-11T18:00:00Z",
+            )
+
+            second = deliver_reviewed_jobs(
+                workspace,
+                first.state,
+                (reviewed(799),),
+                occurred_at="2026-09-11T19:00:00Z",
+            )
+
+            self.assertEqual(second.meaningful_change_job_ids, ())
+            self.assertEqual(
+                read_job(workspace, "JOB-000001")["reverified_at"],
+                "2026-09-11T19:00:00Z",
+            )
+
     def test_discovery_cli_persists_source_checkpoint_across_runs(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace_root = Path(raw) / "Synthetic-Career"
@@ -197,6 +220,41 @@ class DiscoveryDeliveryTests(unittest.TestCase):
                 workspace.jobs / "JOB-000001" / "events.jsonl"
             ).read_text().splitlines()
             self.assertEqual(json.loads(events[-1])["event_type"], "job_reverified")
+
+    def test_higher_priority_cross_source_evidence_updates_canonical_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            first = deliver_reviewed_jobs(
+                workspace,
+                DiscoveryState(),
+                (reviewed(805),),
+                occurred_at="2026-09-11T18:05:00Z",
+            )
+            ats_review = reviewed(805)
+            ats_review = replace(
+                ats_review,
+                candidate=replace(
+                    ats_review.candidate,
+                    source="greenhouse",
+                    source_record_id="synthetic-greenhouse-805",
+                    travel="Up to 10 percent",
+                    verified_at="2026-09-11T19:00:00Z",
+                    raw_field_hash="c" * 64,
+                ),
+                posting_markdown="# Synthetic ATS posting\n",
+            )
+
+            second = deliver_reviewed_jobs(
+                workspace,
+                first.state,
+                (ats_review,),
+                occurred_at="2026-09-11T19:05:00Z",
+            )
+
+            updated = read_job(workspace, "JOB-000001")
+            self.assertEqual(second.meaningful_change_job_ids, ("JOB-000001",))
+            self.assertEqual(updated["source"], "greenhouse")
+            self.assertEqual(updated["travel"], "Up to 10 percent")
 
     def test_quiet_report_suppresses_unchanged_failures(self) -> None:
         self.assertIsNone(discovery_report((), (), (), ()))

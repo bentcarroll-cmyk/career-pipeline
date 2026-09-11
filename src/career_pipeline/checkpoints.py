@@ -9,6 +9,8 @@ import re
 from typing import Mapping
 
 from .atomic import atomic_write_json, load_json
+from .contracts import WorkspacePaths
+from .job_store import workspace_lock
 
 
 @dataclass(frozen=True)
@@ -130,3 +132,47 @@ def load_discovery_state(path: Path) -> DiscoveryState:
         stable_review_batch=stable,
         canonical_jobs=dict(canonical_raw),
     )
+
+
+def merge_discovery_state(
+    workspace: WorkspacePaths,
+    run_state: DiscoveryState,
+    source_results: tuple[tuple[str, SourceResult], ...],
+) -> DiscoveryState:
+    """Merge one completed run into the latest state without losing other runs."""
+    state_path = workspace.state / "discovery-state.json"
+    with workspace_lock(workspace):
+        latest = (
+            load_discovery_state(state_path)
+            if state_path.exists()
+            else DiscoveryState()
+        )
+        canonical_jobs = dict(latest.canonical_jobs)
+        for identity, job_id in run_state.canonical_jobs.items():
+            existing = canonical_jobs.get(identity)
+            if existing is not None and existing != job_id:
+                raise DiscoveryStateError(
+                    "canonical discovery identity maps to conflicting job IDs"
+                )
+            canonical_jobs[identity] = job_id
+        merged = replace(
+            latest,
+            stable_review_batch=(
+                run_state.stable_review_batch
+                if run_state.stable_review_batch is not None
+                else latest.stable_review_batch
+            ),
+            canonical_jobs=canonical_jobs,
+        )
+        for source, result in source_results:
+            checkpoint = merged.sources.get(source)
+            if (
+                result.success
+                and checkpoint is not None
+                and checkpoint.last_successful_at is not None
+                and checkpoint.last_successful_at > result.completed_at
+            ):
+                continue
+            merged = complete_source(merged, source, result)
+        save_discovery_state(state_path, merged)
+        return merged

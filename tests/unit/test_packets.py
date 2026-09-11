@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from career_pipeline.job_store import create_job, read_job
+from career_pipeline.job_store import create_job, read_job, update_job_status
 from career_pipeline.packets import (
     ApplicationManifest,
     InvalidPacketTransition,
@@ -49,6 +49,40 @@ def advance_to_saved(manifest, job_id, artifact_hashes):
 
 
 class PacketTests(unittest.TestCase):
+    def test_packet_work_preserves_advanced_lifecycle_status(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = seed_job(workspace)
+            update_job_status(
+                workspace,
+                job_id,
+                "offer",
+                occurred_at="2026-09-11T20:02:00Z",
+            )
+
+            manifest, record = start_packet(
+                workspace,
+                job_id,
+                PacketOptions(cover_letter_enabled=False),
+                ApplicationManifest(),
+                occurred_at="2026-09-11T20:05:00Z",
+                explicit_request=True,
+            )
+            actual_resume = workspace.root / record.resume_pdf
+            actual_resume.write_bytes(b"%PDF-1.4\nsynthetic\n%%EOF\n")
+            verification = verify_local_artifacts(workspace, record)
+            manifest = advance_to_saved(manifest, job_id, verification.hashes)
+            complete_local_delivery(
+                workspace,
+                manifest,
+                job_id,
+                occurred_at="2026-09-11T20:10:00Z",
+            )
+
+            canonical = read_job(workspace, job_id)
+            self.assertEqual(canonical["status"], "offer")
+            self.assertEqual(canonical["application_versions"][0]["version"], "v001")
+
     def test_final_paths_are_relative_and_directly_browseable_in_v001(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace = create_workspace(Path(raw) / "Synthetic-Career")
