@@ -1,0 +1,25 @@
+{
+  "name": "career-pipeline",
+  "version": "0.1.0",
+  "description": "A local-first job-search operating system for Codex Desktop.",
+  "author": {
+    "name": "Career Pipeline"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Career Pipeline",
+    "shortDescription": "Run a private, local-first career search.",
+    "longDescription": "Onboard privately, discover qualified roles, manage a Linear backlog, and prepare verified application packets on request.",
+    "developerName": "Career Pipeline",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Set up my job search.",
+      "Discover jobs using my approved criteria.",
+      "Review my job-search backlog."
+    ]
+  }
+}

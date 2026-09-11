@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "career-pipeline/discovery-state.schema.json",
+  "title": "Career Pipeline discovery state",
+  "type": "object",
+  "required": ["schema_version", "sources", "stable_review_batch"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "sources": {"type": "object"},
+    "stable_review_batch": {"type": ["string", "null"]}
+  }
+}

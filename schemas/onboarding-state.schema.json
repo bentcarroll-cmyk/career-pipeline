@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "career-pipeline/onboarding-state.schema.json",
+  "title": "Career Pipeline onboarding state",
+  "type": "object",
+  "required": ["schema_version", "stage", "completed", "connectors"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "stage": {"type": "string"},
+    "completed": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "connectors": {"type": "object"}
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "career-pipeline/application-manifest.schema.json",
+  "title": "Career Pipeline application manifest",
+  "type": "object",
+  "required": ["schema_version", "packets"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "packets": {"type": "object"}
+  }
+}

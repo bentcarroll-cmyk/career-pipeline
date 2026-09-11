@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "career-pipeline/config.schema.json",
+  "title": "Career Pipeline configuration",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "workspace_root",
+    "timezone",
+    "paths",
+    "linear",
+    "profile_approved",
+    "criteria_approved",
+    "connectors",
+    "packet_defaults"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "workspace_root": {"type": "string", "minLength": 1},
+    "timezone": {"type": "string", "minLength": 1},
+    "paths": {
+      "type": "object",
+      "required": ["profile", "sources", "applications", "runs", "state"],
+      "additionalProperties": false
+    },
+    "linear": {
+      "type": "object",
+      "required": ["workspace_id", "team_id"]
+    },
+    "profile_approved": {"type": "boolean"},
+    "criteria_approved": {"type": "boolean"},
+    "connectors": {"type": "object"},
+    "packet_defaults": {
+      "type": "object",
+      "required": ["resume_pages", "cover_letter_enabled", "cover_letter_pages"]
+    }
+  }
+}

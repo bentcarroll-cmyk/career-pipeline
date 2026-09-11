@@ -1,0 +1,34 @@
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python and test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Generated user workspaces and application materials
+user-workspaces/
+Career-Workspace/
+**/Applications/
+**/Profile/
+**/Sources/
+**/Runs/
+**/State/
+*.doc
+*.docx
+*.pdf
+
+# Local editor and OS artifacts
+.DS_Store
+.idea/
+.vscode/
