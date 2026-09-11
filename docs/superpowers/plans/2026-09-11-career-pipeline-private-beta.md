@@ -320,7 +320,7 @@ git commit -m "feat: deliver discovery to local job folders"
 Assert:
 
 - selections require exact existing local `JOB-000123` records and a current explicit request;
-- the first mutation sets canonical status to `prepare_application` and appends an event;
+- the first mutation sets canonical status to `prepare_application` and appends an event only from a pre-application state, without rewinding a later or terminal lifecycle status;
 - version allocation is local, monotonic, and resumable;
 - manifest paths are workspace-relative rather than absolute;
 - final PDFs remain directly browseable in the application version folder;
@@ -340,7 +340,7 @@ Expected: FAIL because prototype packet stages require upload and Linear deliver
 
 ### Step 2: Implement local delivery stages
 
-Use stages `selected`, `posting_verified`, `drafted`, `quality_checked`, `saved`, `local_verified`, and `ready`. Resolve manifest paths through the approved workspace root. After local artifact verification, update the canonical job snapshot and events under the workspace lock, then mark the manifest ready. Preserve every delivered version.
+Use stages `selected`, `posting_verified`, `drafted`, `quality_checked`, `saved`, `local_verified`, and `ready`. Resolve manifest paths through the approved workspace root. After local artifact verification, update the canonical job snapshot and events under the workspace lock, then mark the manifest ready. Preserve every delivered version and any lifecycle status later than packet preparation.
 
 ### Step 3: Verify and commit
 

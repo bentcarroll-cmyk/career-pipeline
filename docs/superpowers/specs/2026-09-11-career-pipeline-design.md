@@ -265,7 +265,7 @@ Failed or partial source checks do not advance that source's last-successful tim
 
 When a user explicitly selects one or more local job IDs, Career Pipeline:
 
-1. resolves each exact canonical job folder and records `prepare_application`;
+1. resolves each exact canonical job folder and records `prepare_application` only from a pre-application state, preserving later or terminal lifecycle states;
 2. begins work immediately in the same conversation;
 3. re-verifies the job posting and actual application destination;
 4. reads the current career profile, writing preferences, and role-specific instructions;
@@ -276,7 +276,7 @@ When a user explicitly selects one or more local job IDs, Career Pipeline:
 9. saves the final PDFs and private working evidence in the versioned local application folder;
 10. records exact final hashes and relative paths in the application manifest and canonical job record;
 11. reads the files and updated record back;
-12. sets local status `packet_ready`; and
+12. sets local status `packet_ready` from a pre-application state, or preserves a later lifecycle status while recording the delivered application version; and
 13. clears `prepare_application` only after local delivery is verified.
 
 The default design is clean, text-focused, and ATS-friendly. Workday-specific or other ATS-specific structural rules apply only after verifying the actual destination. Application packet creation never submits the application.

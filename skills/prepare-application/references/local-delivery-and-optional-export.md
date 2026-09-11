@@ -5,7 +5,7 @@ After every quality gate passes:
 1. Verify final filenames, PDF signatures, page counts, and SHA-256 values.
 2. Confirm the final PDFs sit directly in the allocated version folder and private working evidence remains under `working/`.
 3. Record workspace-relative paths and exact hashes in `State/application-manifest.json`.
-4. Append the version and hashes to the canonical `job.json`, set status `packet_ready`, append its event, and read all local state back.
+4. Append the version and hashes to the canonical `job.json`, append its event, and read all local state back. Set status `packet_ready` only from a pre-application status; otherwise preserve the existing lifecycle status.
 5. Report the local application folder to the user. `packet_ready` means materials are prepared; it never means an application was submitted.
 
 Local verification completes packet delivery. No connector is required.

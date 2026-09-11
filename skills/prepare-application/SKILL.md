@@ -18,7 +18,7 @@ Create verified, versioned application packets for exact canonical local jobs.
 ## Start or resume
 
 1. Resolve every exact `Jobs/JOB-000123/job.json`; reject missing or invalid IDs.
-2. Set local status `prepare_application`, append the event, and read it back.
+2. Set local status `prepare_application` for a pre-application job and read it back. Preserve any later lifecycle status (`applied`, `interviewing`, `offer`, or `closed`) and any explicit `not_pursuing` decision; packet progress belongs in the manifest and must not rewind the canonical lifecycle.
 3. Load `State/application-manifest.json`. Start `v001`, allocate the next unused version after a completed packet, or resume the latest incomplete version.
 4. If the approved profile hash changed during interrupted work, explain the conflict and ask whether to restart that job as a new version.
 5. Process multiple jobs independently in the user's order so one failure cannot corrupt another packet.

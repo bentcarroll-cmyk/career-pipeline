@@ -59,6 +59,9 @@ class PluginManifestTests(unittest.TestCase):
     def test_prepare_skill_has_quality_and_delivery_guidance(self) -> None:
         skill_root = ROOT / "skills" / "prepare-application"
         skill_text = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+        delivery_text = (
+            skill_root / "references" / "local-delivery-and-optional-export.md"
+        ).read_text(encoding="utf-8")
         expected = {
             "tailoring.md",
             "quality-gates.md",
@@ -69,6 +72,8 @@ class PluginManifestTests(unittest.TestCase):
             self.assertTrue((skill_root / "references" / name).is_file())
             self.assertIn(f"references/{name}", skill_text)
         self.assertFalse((skill_root / "references" / "linear-delivery.md").exists())
+        self.assertIn("Preserve any later lifecycle status", skill_text)
+        self.assertIn("preserve the existing lifecycle status", delivery_text)
 
     def test_skill_descriptions_are_trigger_conditions(self) -> None:
         for path in (ROOT / "skills").glob("*/SKILL.md"):
