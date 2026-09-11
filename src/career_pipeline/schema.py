@@ -48,8 +48,8 @@ def _relative_path_errors(
 
 def _validate_config(value: Mapping[str, object]) -> list[ValidationError]:
     errors: list[ValidationError] = []
-    if value.get("schema_version") != 1:
-        errors.append(_error("schema_version", "schema_version", "must equal 1"))
+    if value.get("schema_version") != 2:
+        errors.append(_error("schema_version", "schema_version", "must equal 2"))
     for field in ("workspace_root", "timezone"):
         item = value.get(field)
         if not isinstance(item, str) or not item.strip():

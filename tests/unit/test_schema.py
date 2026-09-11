@@ -6,7 +6,7 @@ from career_pipeline.schema import validate_document
 class SchemaTests(unittest.TestCase):
     def test_config_requires_timezone_and_relative_subpaths(self) -> None:
         valid = {
-            "schema_version": 1,
+            "schema_version": 2,
             "workspace_root": "/approved-at-runtime",
             "timezone": "America/New_York",
             "paths": {
@@ -35,7 +35,7 @@ class SchemaTests(unittest.TestCase):
 
     def test_linear_is_optional_configuration(self) -> None:
         valid = {
-            "schema_version": 1,
+            "schema_version": 2,
             "workspace_root": "/approved-at-runtime",
             "timezone": "America/New_York",
             "paths": {

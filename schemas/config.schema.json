@@ -14,7 +14,7 @@
     "packet_defaults"
   ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "workspace_root": {"type": "string", "minLength": 1},
     "timezone": {"type": "string", "minLength": 1},
     "paths": {

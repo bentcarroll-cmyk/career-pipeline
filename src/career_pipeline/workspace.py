@@ -36,21 +36,9 @@ def _contains(parent: Path, child: Path) -> bool:
         return False
 
 
-def create_workspace(
-    root: Path,
-    repository_root: Path | None = None,
-) -> WorkspacePaths:
+def workspace_paths(root: Path) -> WorkspacePaths:
+    """Resolve workspace paths without creating or changing anything."""
     resolved = root.expanduser().resolve()
-    if repository_root is not None and _contains(repository_root.resolve(), resolved):
-        raise WorkspaceError("workspace root must be outside the plugin repository")
-    for relative in _DIRECTORIES:
-        (resolved / relative).mkdir(parents=True, exist_ok=True)
-    next_job_id = resolved / "State" / "next-job-id.json"
-    if not next_job_id.exists():
-        atomic_write_json(
-            next_job_id,
-            {"schema_version": 1, "next_id": 1},
-        )
     return WorkspacePaths(
         root=resolved,
         profile=resolved / "Profile",
@@ -61,6 +49,25 @@ def create_workspace(
         runs=resolved / "Runs",
         state=resolved / "State",
     )
+
+
+def create_workspace(
+    root: Path,
+    repository_root: Path | None = None,
+) -> WorkspacePaths:
+    paths = workspace_paths(root)
+    resolved = paths.root
+    if repository_root is not None and _contains(repository_root.resolve(), resolved):
+        raise WorkspaceError("workspace root must be outside the plugin repository")
+    for relative in _DIRECTORIES:
+        (resolved / relative).mkdir(parents=True, exist_ok=True)
+    next_job_id = resolved / "State" / "next-job-id.json"
+    if not next_job_id.exists():
+        atomic_write_json(
+            next_job_id,
+            {"schema_version": 1, "next_id": 1},
+        )
+    return paths
 
 
 def _sha256(path: Path) -> str:
