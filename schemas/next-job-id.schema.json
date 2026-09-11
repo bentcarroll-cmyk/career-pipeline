@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "career-pipeline/next-job-id.schema.json",
+  "title": "Career Pipeline next job identifier",
+  "type": "object",
+  "required": ["schema_version", "next_id"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "next_id": {"type": "integer", "minimum": 1, "maximum": 999999}
+  },
+  "additionalProperties": false
+}

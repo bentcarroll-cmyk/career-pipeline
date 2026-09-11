@@ -33,7 +33,9 @@ def main() -> int:
         workspace_root,
         workspace_root / "Profile",
         workspace_root / "Sources",
+        workspace_root / "Jobs",
         workspace_root / "Applications",
+        workspace_root / "Indexes",
         workspace_root / "Runs",
         workspace_root / "State",
     )

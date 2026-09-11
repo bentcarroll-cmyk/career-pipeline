@@ -12,7 +12,9 @@ class WorkspacePaths:
     root: Path
     profile: Path
     sources: Path
+    jobs: Path
     applications: Path
+    indexes: Path
     runs: Path
     state: Path
 

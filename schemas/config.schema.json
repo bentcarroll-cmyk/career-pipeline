@@ -8,7 +8,6 @@
     "workspace_root",
     "timezone",
     "paths",
-    "linear",
     "profile_approved",
     "criteria_approved",
     "connectors",
@@ -20,12 +19,17 @@
     "timezone": {"type": "string", "minLength": 1},
     "paths": {
       "type": "object",
-      "required": ["profile", "sources", "applications", "runs", "state"],
+      "required": ["profile", "sources", "jobs", "applications", "indexes", "runs", "state"],
+      "properties": {
+        "profile": {"type": "string", "minLength": 1},
+        "sources": {"type": "string", "minLength": 1},
+        "jobs": {"type": "string", "minLength": 1},
+        "applications": {"type": "string", "minLength": 1},
+        "indexes": {"type": "string", "minLength": 1},
+        "runs": {"type": "string", "minLength": 1},
+        "state": {"type": "string", "minLength": 1}
+      },
       "additionalProperties": false
-    },
-    "linear": {
-      "type": "object",
-      "required": ["workspace_id", "team_id"]
     },
     "profile_approved": {"type": "boolean"},
     "criteria_approved": {"type": "boolean"},

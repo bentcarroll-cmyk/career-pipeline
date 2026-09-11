@@ -1,4 +1,5 @@
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -27,14 +28,36 @@ class WorkspaceTests(unittest.TestCase):
                     "Profile",
                     "Sources",
                     "Sources/connector-source-notes",
+                    "Jobs",
                     "Applications",
+                    "Indexes",
                     "Runs",
                     "Runs/discovery",
                     "Runs/lifecycle",
                     "State",
                 },
             )
+            self.assertEqual(paths.jobs, root.resolve() / "Jobs")
             self.assertEqual(paths.applications, root.resolve() / "Applications")
+            self.assertEqual(paths.indexes, root.resolve() / "Indexes")
+            self.assertEqual(
+                json.loads((paths.state / "next-job-id.json").read_text()),
+                {"schema_version": 1, "next_id": 1},
+            )
+
+    def test_existing_id_allocation_is_not_reset(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "Synthetic-Career"
+            paths = create_workspace(root)
+            counter = paths.state / "next-job-id.json"
+            counter.write_text(
+                '{"schema_version": 1, "next_id": 42}\n',
+                encoding="utf-8",
+            )
+
+            create_workspace(root)
+
+            self.assertEqual(json.loads(counter.read_text())["next_id"], 42)
 
     def test_resume_is_preserved_without_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

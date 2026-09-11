@@ -20,6 +20,8 @@ def main() -> int:
     missing = [
         relative for relative in _DIRECTORIES if not (args.root / relative).is_dir()
     ]
+    if not (args.root / "State" / "next-job-id.json").is_file():
+        missing.append("State/next-job-id.json")
     for relative in missing:
         print(f"missing: {relative}")
     if missing:

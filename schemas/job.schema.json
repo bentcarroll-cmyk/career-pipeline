@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "career-pipeline/job.schema.json",
+  "title": "Career Pipeline canonical job",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "job_id",
+    "employer",
+    "title",
+    "posting_url",
+    "application_url",
+    "source",
+    "verified_at",
+    "disposition",
+    "status",
+    "role_to_profile_fit",
+    "strengths",
+    "gaps",
+    "uncertainties",
+    "recommended_next_action",
+    "discovered_at",
+    "paths",
+    "application_versions",
+    "exports"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "job_id": {"type": "string", "pattern": "^JOB-[0-9]{6}$"},
+    "employer": {"type": "string", "minLength": 1},
+    "title": {"type": "string", "minLength": 1},
+    "location": {"type": ["string", "null"]},
+    "workplace_model": {"type": ["string", "null"]},
+    "travel": {"type": ["string", "null"]},
+    "compensation_evidence": {"type": ["string", "null"]},
+    "posting_url": {"type": "string", "minLength": 1},
+    "application_url": {"type": "string", "minLength": 1},
+    "requisition_id": {"type": ["string", "null"]},
+    "source": {"type": "string", "minLength": 1},
+    "verified_at": {"type": "string", "minLength": 1},
+    "disposition": {"enum": ["strong_match", "worth_considering"]},
+    "status": {
+      "enum": [
+        "new",
+        "needs_confirmation",
+        "prepare_application",
+        "packet_ready",
+        "applied",
+        "interviewing",
+        "offer",
+        "not_pursuing",
+        "closed"
+      ]
+    },
+    "role_to_profile_fit": {"type": "string", "minLength": 1},
+    "strengths": {"type": "array"},
+    "gaps": {"type": "array"},
+    "uncertainties": {"type": "array"},
+    "deadline": {"type": ["string", "null"]},
+    "recommended_next_action": {"type": "string", "minLength": 1},
+    "discovered_at": {"type": "string", "minLength": 1},
+    "reverified_at": {"type": ["string", "null"]},
+    "paths": {
+      "type": "object",
+      "required": ["posting", "assessment", "events", "working"],
+      "additionalProperties": false
+    },
+    "application_versions": {"type": "array"},
+    "exports": {"type": "array"}
+  },
+  "additionalProperties": false
+}

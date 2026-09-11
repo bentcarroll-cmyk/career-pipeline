@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "career-pipeline/job-event.schema.json",
+  "title": "Career Pipeline job event",
+  "type": "object",
+  "required": ["schema_version", "event_type", "occurred_at", "job_id"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "event_type": {"type": "string", "minLength": 1},
+    "occurred_at": {"type": "string", "minLength": 1},
+    "job_id": {"type": "string", "pattern": "^JOB-[0-9]{6}$"},
+    "prior_status": {"type": ["string", "null"]},
+    "status": {"type": "string"},
+    "metadata": {"type": "object"}
+  },
+  "additionalProperties": false
+}

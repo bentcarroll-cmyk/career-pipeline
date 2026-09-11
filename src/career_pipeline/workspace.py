@@ -6,6 +6,7 @@ import hashlib
 import shutil
 from pathlib import Path
 
+from .atomic import atomic_write_json
 from .contracts import SourceReceipt, WorkspacePaths
 
 
@@ -17,7 +18,9 @@ _DIRECTORIES = (
     "Profile",
     "Sources",
     "Sources/connector-source-notes",
+    "Jobs",
     "Applications",
+    "Indexes",
     "Runs",
     "Runs/discovery",
     "Runs/lifecycle",
@@ -42,11 +45,19 @@ def create_workspace(
         raise WorkspaceError("workspace root must be outside the plugin repository")
     for relative in _DIRECTORIES:
         (resolved / relative).mkdir(parents=True, exist_ok=True)
+    next_job_id = resolved / "State" / "next-job-id.json"
+    if not next_job_id.exists():
+        atomic_write_json(
+            next_job_id,
+            {"schema_version": 1, "next_id": 1},
+        )
     return WorkspacePaths(
         root=resolved,
         profile=resolved / "Profile",
         sources=resolved / "Sources",
+        jobs=resolved / "Jobs",
         applications=resolved / "Applications",
+        indexes=resolved / "Indexes",
         runs=resolved / "Runs",
         state=resolved / "State",
     )
