@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "career-pipeline/lifecycle-receipt.schema.json",
+  "title": "Minimal lifecycle evidence receipt",
+  "type": "object",
+  "required": [
+    "source_kind",
+    "source_receipt_hash",
+    "observed_at",
+    "event_class",
+    "action",
+    "reason"
+  ],
+  "properties": {
+    "source_kind": {"enum": ["gmail", "calendar"]},
+    "source_receipt_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "observed_at": {"type": "string", "minLength": 1},
+    "event_class": {"type": "string", "minLength": 1},
+    "action": {"enum": ["apply_update", "needs_review", "ignore"]},
+    "ticket_id": {"type": ["string", "null"]},
+    "target_status": {"type": ["string", "null"]},
+    "reason": {"type": "string", "minLength": 1}
+  },
+  "additionalProperties": false
+}

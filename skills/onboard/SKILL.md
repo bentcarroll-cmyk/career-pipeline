@@ -51,4 +51,4 @@ Show the documents for correction. Record current hashes only after the user exp
 
 ### Schedule and activation
 
-Read [readiness and activation](references/readiness-and-activation.md). Offer twice each weekday in the user's timezone first, then daily, weekly, or custom. Offer one weekday lifecycle check only when Gmail or Calendar is enabled. Run readiness, show actionable failures, and keep discovery disabled until readiness passes and the user explicitly approves activation.
+Read [readiness and activation](references/readiness-and-activation.md). Offer twice each weekday in the user's timezone first, then daily, weekly, or custom. Offer one weekday lifecycle check only when Gmail or Calendar is enabled; when selected, apply [lifecycle reconciliation](references/lifecycle-reconciliation.md). Run readiness, show actionable failures, and keep discovery disabled until readiness passes and the user explicitly approves activation.
