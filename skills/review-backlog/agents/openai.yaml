@@ -1,0 +1,6 @@
+interface:
+  display_name: "Review Career Backlog"
+  short_description: "Compare roles and choose next actions"
+  default_prompt: "Use $review-backlog to review my current job-search backlog."
+policy:
+  allow_implicit_invocation: true

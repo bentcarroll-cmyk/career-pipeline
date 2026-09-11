@@ -1,0 +1,16 @@
+[
+  {
+    "source_record_id": "synthetic-public-record",
+    "requisition_id": "SYN-PUB-404",
+    "employer": "Atlas Example Group",
+    "title": "Product Operations Lead",
+    "responsibilities": ["Improve a fictional product operating cadence."],
+    "location": "Philadelphia, PA",
+    "workplace_model": "hybrid",
+    "travel": "Up to 10 percent",
+    "compensation_evidence": null,
+    "posting_url": "https://jobs.example/postings/SYN-PUB-404",
+    "application_url": "https://jobs.example/apply/SYN-PUB-404",
+    "posted_at": "2026-09-08T12:00:00Z"
+  }
+]

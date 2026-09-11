@@ -1,0 +1,17 @@
+{
+  "employer": "Juniper Example Works",
+  "jobs": [
+    {
+      "id": "synthetic-ashby-record",
+      "requisitionId": "SYN-ASH-303",
+      "title": "VP, Business Operations",
+      "location": "Boston, MA",
+      "workplaceType": "hybrid",
+      "descriptionPlain": "Scale fictional cross-functional operations.",
+      "jobUrl": "https://jobs.example/postings/SYN-ASH-303",
+      "applyUrl": "https://jobs.example/apply/SYN-ASH-303",
+      "publishedAt": "2026-09-09T09:00:00Z",
+      "compensation": "$180,000–$210,000 fictional range"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Discover Career Opportunities"
+  short_description: "Find and verify roles for the Linear backlog"
+  default_prompt: "Use $discover-jobs to find current roles matching my approved criteria."
+policy:
+  allow_implicit_invocation: true

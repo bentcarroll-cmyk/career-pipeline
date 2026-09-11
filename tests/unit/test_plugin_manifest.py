@@ -43,6 +43,19 @@ class PluginManifestTests(unittest.TestCase):
             self.assertIn(f"references/{name}", skill_text)
         self.assertTrue((skill_root / "agents" / "openai.yaml").is_file())
 
+    def test_discovery_and_review_skills_have_progressive_guidance(self) -> None:
+        expectations = {
+            "discover-jobs": {"source-routing.md", "evaluation-and-delivery.md"},
+            "review-backlog": {"backlog-actions.md"},
+        }
+        for skill_name, references in expectations.items():
+            skill_root = ROOT / "skills" / skill_name
+            skill_text = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+            self.assertTrue((skill_root / "agents" / "openai.yaml").is_file())
+            for name in references:
+                self.assertTrue((skill_root / "references" / name).is_file())
+                self.assertIn(f"references/{name}", skill_text)
+
 
 if __name__ == "__main__":
     unittest.main()

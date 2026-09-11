@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "career-pipeline/job-candidate.schema.json",
+  "title": "Normalized job candidate",
+  "type": "object",
+  "required": [
+    "source",
+    "source_record_id",
+    "employer",
+    "title",
+    "responsibilities",
+    "posting_url",
+    "application_url",
+    "verified_at",
+    "verification_status",
+    "raw_field_hash",
+    "uncertainties"
+  ],
+  "properties": {
+    "source": {"type": "string", "minLength": 1},
+    "source_record_id": {"type": "string", "minLength": 1},
+    "requisition_id": {"type": ["string", "null"]},
+    "employer": {"type": "string", "minLength": 1},
+    "title": {"type": "string", "minLength": 1},
+    "responsibilities": {"type": "array", "items": {"type": "string"}},
+    "location": {"type": ["string", "null"]},
+    "workplace_model": {"type": ["string", "null"]},
+    "travel": {"type": ["string", "null"]},
+    "compensation_evidence": {"type": ["string", "null"]},
+    "posting_url": {"type": "string", "minLength": 1},
+    "application_url": {"type": "string", "minLength": 1},
+    "team": {"type": ["string", "null"]},
+    "posted_at": {"type": ["string", "null"]},
+    "updated_at": {"type": ["string", "null"]},
+    "deadline": {"type": ["string", "null"]},
+    "verified_at": {"type": "string", "minLength": 1},
+    "verification_status": {"type": "string", "minLength": 1},
+    "raw_field_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "uncertainties": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}

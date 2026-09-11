@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "career-pipeline/linear-delivery-receipt.schema.json",
+  "title": "Verified Linear delivery receipt",
+  "type": "object",
+  "required": ["candidate_key", "issue_id", "verified", "body_hash"],
+  "properties": {
+    "candidate_key": {"type": "string", "minLength": 1},
+    "issue_id": {"type": "string", "minLength": 1},
+    "verified": {"const": true},
+    "body_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,17 @@
+[
+  {
+    "id": "synthetic-lever-record",
+    "requisition": "SYN-LEV-202",
+    "employer": "Harbor Example Labs",
+    "text": "Strategy Lead",
+    "categories": {
+      "location": "Remote — United States",
+      "team": "Strategy",
+      "commitment": "Full-time"
+    },
+    "descriptionPlain": "Build a fictional annual planning system.",
+    "hostedUrl": "https://jobs.example/postings/SYN-LEV-202",
+    "applyUrl": "https://jobs.example/apply/SYN-LEV-202",
+    "createdAt": 1789056000000
+  }
+]

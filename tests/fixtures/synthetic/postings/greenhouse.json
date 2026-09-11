@@ -1,0 +1,15 @@
+{
+  "employer": "Northstar Example Cooperative",
+  "jobs": [
+    {
+      "id": "synthetic-greenhouse-record",
+      "requisition_id": "SYN-GH-101",
+      "title": "Director of Operations",
+      "location": {"name": "New York, NY"},
+      "content": "<p>Lead planning &amp; operations.</p>",
+      "absolute_url": "https://jobs.example/postings/SYN-GH-101",
+      "application_url": "https://jobs.example/apply/SYN-GH-101",
+      "updated_at": "2026-09-10T15:30:00Z"
+    }
+  ]
+}
