@@ -1,7 +1,7 @@
 # Career Pipeline — Product and Architecture Design
 
 **Date:** September 11, 2026  
-**Status:** Approved folder-first direction; awaiting written-revision review
+**Status:** Approved
 **Plugin name:** `career-pipeline`
 
 ## 1. Product objective

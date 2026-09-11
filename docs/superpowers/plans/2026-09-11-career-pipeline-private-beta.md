@@ -1,880 +1,596 @@
 # Career Pipeline Private Beta Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For Codex:** Use `superpowers:executing-plans` to implement this plan task by task. Use `superpowers:test-driven-development` for every behavior change and `superpowers:verification-before-completion` before claiming a milestone or release is complete.
 
-**Goal:** Build a private-beta Codex Desktop plugin that onboards a user into a local-first career workspace, discovers and tracks qualifying roles in Linear, creates verified application packets immediately on explicit request, and optionally reconciles lifecycle evidence.
+**Goal:** Refactor and complete the Career Pipeline Codex Desktop plugin so each user's local folder workspace is the sole system of record, every connector is optional, application packets are created immediately on explicit request, and the private-beta package contains only reusable code, instructions, and synthetic fixtures.
 
-**Architecture:** The repository is the plugin root. Four concise Codex skills orchestrate connector calls and user conversations, while a dependency-light Python package owns deterministic state transitions, schemas, paths, deduplication, manifests, migrations, and privacy checks. Connector responses and document/PDF operations cross explicit JSON boundaries so the core can be tested with synthetic fixtures and the plugin never needs a developer-operated service.
+**Architecture:** Canonical opportunity state lives in one immutable-identity folder per qualifying role under `Jobs/JOB-000123/`. Atomic JSON snapshots and append-only events record current state and history. `Indexes/` contains disposable views rebuilt from canonical folders. Deterministic Python helpers enforce locks, allocation, validation, migration, packet versioning, and privacy boundaries; Codex skills handle conversational judgment and connector use. Linear is isolated behind an explicit export boundary and never participates in readiness, identity, deduplication, workflow state, or local delivery.
 
-**Tech Stack:** Codex Desktop plugin manifest and skills (Markdown/YAML/JSON), Python 3.11+ standard library, JSON Schema documents, `unittest`, Codex connector tools, Codex document/PDF capabilities, Git
+**Tech stack:** Codex plugin manifest and skills, Python 3.11+ standard library, JSON Schema documents, `unittest`, deterministic ZIP packaging, SHA-256 receipts.
 
-**Spec:** `docs/superpowers/specs/2026-09-11-career-pipeline-design.md`
+**Approved design:** `docs/superpowers/specs/2026-09-11-career-pipeline-design.md`
 
-## Global Constraints
+## Global constraints
 
-- The plugin name is exactly `career-pipeline`.
-- Version one contains exactly four user-facing skills: Onboard, Discover jobs, Review backlog, and Prepare application.
-- Linear is required; every other connector is offered, capability-tested, accepted, or declined independently.
-- Declining Linear prevents activation. Declining any optional connector preserves a documented fallback.
-- Discovery defaults to twice each weekday in the user's timezone, with daily, weekly, and custom alternatives.
-- Application packets are created immediately in the current conversation after an explicit user request; packet creation is never a scheduled automation and a manually added Linear label is never a wake-up event.
-- Final employer-facing PDFs are stored directly under `<approved-root>/Applications/<ticket>_<company>_<role>/vNNN/`; private drafts and evidence stay in that version's `working/` folder.
-- The source résumé is copied unchanged, hashed, and never overwritten.
-- User data lives only in the user-approved local workspace and the user's connected services. The plugin has no hosted service, shared database, telemetry, analytics SDK, remote logging, hidden destination, or developer-controlled credential.
-- Repository content, tests, examples, and release artifacts contain only synthetic people, employers, postings, messages, tickets, and documents.
-- Reusable files use configuration values, temporary directories, and relative paths; they contain no developer username, personal identifier, private URL, credential, or fixed user filesystem path.
-- State writes are atomic. Interrupted onboarding, discovery, packet, and migration workflows resume idempotently.
-- Linear issue creation, packet upload, and attachment delivery are read back before state advances.
-- Clear non-matches remain in local run evidence and are never created in Linear.
-- No workflow submits an application, sends a message, accepts an invitation, creates a calendar event, or contacts another person without a separate explicit request.
-- Schema migrations require confirmation, create a backup first, and never overwrite application history.
-- Every implementation task uses synthetic fixtures and ends with a focused verification and reviewable commit.
+- Never place personal information, real resume text, application material, credentials, private URLs, telemetry, or developer-specific absolute paths in the repository.
+- Use fictional employers, people, requisitions, postings, messages, calendar events, and documents in all tests and examples.
+- Persist user data only beneath the root approved during onboarding. Persist relative artifact paths inside workspace records.
+- Keep final employer-facing PDFs directly under `<approved-root>/Applications/<job>_<company>_<role>/vNNN/`; keep drafts and review evidence in that version's `working/` directory.
+- Create packets only after a current, explicit user request. Begin in the same conversation. Never create a packet automation or treat a file, label, or status change as a wake-up event.
+- Treat every connector, including Linear, as an independent optional decision. A usable public discovery lane is sufficient for activation.
+- Treat `Jobs/` as canonical and `Indexes/` as regenerable. Never delete or rename a canonical job folder to represent lifecycle state.
+- Allocate stable six-digit local IDs under a workspace lock and never reuse an allocated number.
+- Keep optional export failures outside local transactions. A verified local record remains valid if every export fails.
+- Use `apply_patch` for repository edits and commit each completed task as a reviewable checkpoint.
 
----
+## Existing implementation to preserve or adapt
 
-## File and responsibility map
+The prototype already contains a valid plugin shell, privacy scanner, source normalization, evaluation and deduplication helpers, packet versioning and quality receipts, plus synthetic tests. Preserve those behaviors where compatible.
 
-### Plugin entrypoints
+Linear authority remains embedded in:
 
-- `.codex-plugin/plugin.json` — installable plugin metadata; advertises skills only and declares no custom app or MCP server.
-- `skills/onboard/SKILL.md` — resumable privacy, workspace, connector, résumé, interview, approval, readiness, and automation-activation conversation.
-- `skills/discover-jobs/SKILL.md` — manual or scheduled source search, normalization, verification, assessment, deduplication, Linear delivery, and quiet reporting.
-- `skills/review-backlog/SKILL.md` — compare existing Linear opportunities, record dispositions, surface deadlines, and route explicit selections into immediate packet work.
-- `skills/prepare-application/SKILL.md` — immediate single- or multi-ticket packet generation, quality gates, local versioning, Linear delivery, and resumption.
-- `skills/*/agents/openai.yaml` — UI metadata and invocation policy for each skill.
-- `skills/*/references/*.md` — substantial workflow rules loaded only by the relevant skill.
-- `skills/*/assets/*` — synthetic, user-data-free profile, ticket, résumé, cover-letter, and automation-prompt templates.
+- `src/career_pipeline/onboarding.py`
+- `src/career_pipeline/readiness.py`
+- `src/career_pipeline/schema.py`
+- `src/career_pipeline/automation_policy.py`
+- `src/career_pipeline/linear_delivery.py`
+- discovery, backlog, onboarding, packet, and lifecycle skill instructions
+- configuration, discovery-state, and delivery schemas
+- several existing tests and scripts
 
-### Deterministic runtime
+There is also uncommitted lifecycle and migration work from the interrupted prototype. Keep it visible, rewrite it against local canonical state, and do not discard it.
 
-- `src/career_pipeline/atomic.py` — atomic JSON and text writes.
-- `src/career_pipeline/contracts.py` — typed dataclasses and enum-like literals shared across commands.
-- `src/career_pipeline/schema.py` — local schema validation and version checks.
-- `src/career_pipeline/workspace.py` — safe workspace creation, path resolution, and source résumé preservation.
-- `src/career_pipeline/onboarding.py` — resumable onboarding transitions and connector decisions.
-- `src/career_pipeline/readiness.py` — activation gates and automation eligibility.
-- `src/career_pipeline/automation_policy.py` — allowed automation kinds and prompt rendering; rejects packet automation.
-- `src/career_pipeline/sources/*.py` — normalization for Greenhouse, Lever, Ashby, and generic connector snapshots.
-- `src/career_pipeline/evaluation.py` — validation of evidence-backed fit assessments.
-- `src/career_pipeline/dedupe.py` — requisition identity and conservative fallback fingerprints.
-- `src/career_pipeline/checkpoints.py` — independent source-success and stable-batch state.
-- `src/career_pipeline/linear_delivery.py` — issue payloads, final duplicate checks, and readback receipts.
-- `src/career_pipeline/packets.py` — safe names, version allocation, manifest transitions, hashes, and resume logic.
-- `src/career_pipeline/reconciliation.py` — exact-role lifecycle evidence decisions and minimal receipts.
-- `src/career_pipeline/migrations.py` — versioned, confirmed, backed-up state migrations.
-- `src/career_pipeline/privacy.py` — repository/package scans for sensitive content and forbidden destinations.
-- `scripts/*.py` — thin CLI adapters over the package; no business rules live only in a CLI file.
-- `schemas/*.schema.json` — committed contracts for configuration, state, normalized jobs, assessments, delivery receipts, packet manifests, and lifecycle receipts.
-
-### Verification and distribution
-
-- `tests/unit/` — focused standard-library tests for every deterministic module.
-- `tests/integration/` — fake-source and fake-Linear workflow tests.
-- `tests/e2e/` — synthetic onboarding, discovery, immediate packet, resumption, lifecycle, and upgrade scenarios.
-- `tests/fixtures/synthetic/` — fictional profiles, postings, connector snapshots, Linear records, and mail/calendar evidence.
-- `scripts/validate_plugin.py` — repository-local packaging and manifest preflight.
-- `scripts/scan_private_data.py` — fail-closed privacy/credential/path scan.
-- `scripts/package_plugin.py` — reproducible archive builder with an explicit inclusion list.
-- `README.md` — private-beta installation, start prompt, behavior boundaries, and local workspace locations.
-- `PRIVACY.md` — accurate local/connector data handling statement.
-- `SECURITY.md` — credential handling and private vulnerability-reporting instructions.
-- `docs/BETA_TESTING.md` — three-to-five-user manual acceptance checklist with no telemetry.
-- `CHANGELOG.md` — semver release history.
-
-## Milestone map
-
-1. **Plugin shell and onboarding:** Tasks 1–4.
-2. **Discovery and backlog:** Tasks 5–7.
-3. **Immediate application packets:** Tasks 8–9.
-4. **Lifecycle and beta hardening:** Tasks 10–12.
-
----
-
-### Task 1: Private-safe plugin shell
+## Task 1: Freeze the local workspace contract
 
 **Files:**
-- Create: `.codex-plugin/plugin.json`
-- Create: `pyproject.toml`
-- Create: `src/career_pipeline/__init__.py`
-- Create: `src/career_pipeline/privacy.py`
-- Create: `scripts/scan_private_data.py`
-- Create: `scripts/validate_plugin.py`
-- Create: `skills/onboard/SKILL.md`
-- Create: `skills/discover-jobs/SKILL.md`
-- Create: `skills/review-backlog/SKILL.md`
-- Create: `skills/prepare-application/SKILL.md`
-- Create: `tests/unit/test_plugin_manifest.py`
-- Create: `tests/unit/test_privacy.py`
-- Modify: `.gitignore`
-- Include unchanged: `docs/superpowers/specs/2026-09-11-career-pipeline-design.md`
-- Include unchanged: `docs/superpowers/plans/2026-09-11-career-pipeline-private-beta.md`
 
-**Interfaces:**
-- Produces: `scan_tree(root: Path) -> list[Finding]`
-- Produces: `validate_manifest(root: Path) -> list[str]`
-- Produces: installable manifest name `career-pipeline`, version `0.1.0`, and skills path `./skills/`
-- Consumes: no earlier runtime interfaces
+- Modify: `src/career_pipeline/contracts.py`
+- Modify: `src/career_pipeline/workspace.py`
+- Modify: `src/career_pipeline/schema.py`
+- Modify: `schemas/config.schema.json`
+- Create: `schemas/job.schema.json`
+- Create: `schemas/job-event.schema.json`
+- Create: `schemas/next-job-id.schema.json`
+- Modify: `tests/unit/test_workspace.py`
+- Modify: `tests/unit/test_schema.py`
+- Create: `tests/unit/test_job_contract.py`
+- Modify: `scripts/init_workspace.py`
+- Modify: `scripts/validate_workspace.py`
 
-- [ ] **Step 1: Write manifest and privacy failure tests**
+### Step 1: Write failing contract tests
 
-Create tests that parse the manifest, require strict semver and the four expected skill directories, reject `apps` and `mcpServers`, and scan a temporary tree containing constructed secret, personal-path, private-URL, telemetry, and application-document examples.
+Assert that a new workspace creates:
 
-```python
-def test_manifest_exposes_only_skills(self):
-    manifest = json.loads((ROOT / ".codex-plugin/plugin.json").read_text())
-    self.assertEqual(manifest["name"], "career-pipeline")
-    self.assertEqual(manifest["version"], "0.1.0")
-    self.assertEqual(manifest["skills"], "./skills/")
-    self.assertNotIn("apps", manifest)
-    self.assertNotIn("mcpServers", manifest)
+- `Profile/`, `Sources/`, `Jobs/`, `Applications/`, `Indexes/`, `Runs/discovery/`, `Runs/lifecycle/`, and `State/`;
+- `State/next-job-id.json` initialized without reusing an existing allocation;
+- a `WorkspacePaths` value exposing `jobs`, `applications`, `indexes`, and `state`; and
+- no files or directories inside the plugin repository when the approved root is external.
 
-def test_scan_rejects_sensitive_tree(self):
-    with tempfile.TemporaryDirectory() as raw:
-        root = Path(raw)
-        (root / "unsafe.txt").write_text("api" + "_key=synthetic-secret-value")
-        self.assertTrue(scan_tree(root))
-```
+Assert that configuration validation:
 
-- [ ] **Step 2: Run the tests and confirm the empty shell fails**
+- requires relative paths for `profile`, `sources`, `jobs`, `applications`, `indexes`, `runs`, and `state`;
+- accepts a missing or declined Linear connector;
+- rejects traversal and absolute persisted subpaths; and
+- rejects an unsupported schema version.
 
-Run: `python3 -m unittest tests.unit.test_plugin_manifest tests.unit.test_privacy -v`  
-Expected: FAIL because the manifest and privacy module do not exist.
+Define a minimal valid `job.json` contract with stable local ID, normalized opportunity fields, disposition, lifecycle status, verification time, relative paths, and optional export receipts.
 
-- [ ] **Step 3: Implement the minimal package, manifest, and valid skill entrypoints**
-
-Create a manifest with a neutral publisher name, no email or personal URL, at most three starter prompts, and no connector endpoint. Give each of the four skill folders valid frontmatter plus a concise, accurate boundary: Onboard requires Linear and explicit activation approval; Discover jobs creates only qualifying backlog issues; Review backlog never submits; Prepare application requires an explicit request and starts immediately without scheduling. Implement `Finding(path, line, rule)`, binary-file skipping, an explicit package allowlist, and rules for credentials, email addresses, user-home paths, private URLs, telemetry SDKs, generated workspace directories, and common application file formats. Make the CLI exit nonzero and print relative paths only when findings exist.
-
-- [ ] **Step 4: Add repository-local manifest validation**
-
-Validate required fields, semver, relative in-archive paths, referenced files, skill frontmatter, absence of scaffold markers, and absence of unsupported manifest fields. Keep the validator dependency-free.
-
-- [ ] **Step 5: Run shell verification**
-
-Run: `python3 -m unittest tests.unit.test_plugin_manifest tests.unit.test_privacy -v`  
-Expected: PASS.
-
-Run: `python3 scripts/scan_private_data.py .`  
-Expected: PASS with zero findings.
-
-Run: `python3 scripts/validate_plugin.py .`  
-Expected: PASS with exactly four valid skill entrypoints.
-
-- [ ] **Step 6: Commit the private-safe shell**
+Run:
 
 ```bash
-git add .gitignore .codex-plugin pyproject.toml src scripts tests docs/superpowers
-git commit -m "chore: initialize private-safe career pipeline plugin"
+python3 -m unittest tests.unit.test_workspace tests.unit.test_schema tests.unit.test_job_contract -v
 ```
 
----
+Expected: FAIL because the prototype lacks `Jobs`, `Indexes`, local ID state, and the local job schema.
 
-### Task 2: Workspace, schemas, and atomic state
+### Step 2: Implement the workspace and schemas
 
-**Files:**
-- Create: `schemas/config.schema.json`
-- Create: `schemas/onboarding-state.schema.json`
-- Create: `schemas/discovery-state.schema.json`
-- Create: `schemas/application-manifest.schema.json`
-- Create: `src/career_pipeline/atomic.py`
-- Create: `src/career_pipeline/contracts.py`
-- Create: `src/career_pipeline/schema.py`
-- Create: `src/career_pipeline/workspace.py`
-- Create: `scripts/init_workspace.py`
-- Create: `scripts/validate_workspace.py`
-- Create: `tests/unit/test_atomic.py`
-- Create: `tests/unit/test_workspace.py`
-- Create: `tests/unit/test_schema.py`
+Extend `WorkspacePaths` and workspace creation without embedding a user-specific location. Initialize new state atomically and leave existing state untouched. Make Linear a normal connector entry rather than a top-level required destination. Keep schemas strict enough to reject malformed state while allowing connector-specific settings only when configured.
 
-**Interfaces:**
-- Produces: `atomic_write_json(path: Path, value: Mapping[str, object]) -> None`
-- Produces: `load_json(path: Path) -> dict[str, object]`
-- Produces: `create_workspace(root: Path) -> WorkspacePaths`
-- Produces: `preserve_source_resume(source: Path, paths: WorkspacePaths) -> SourceReceipt`
-- Produces: `validate_document(schema_name: str, value: Mapping[str, object]) -> list[ValidationError]`
-- `WorkspacePaths` exposes `profile`, `sources`, `applications`, `runs`, and `state` paths derived from the approved root.
+### Step 3: Verify and commit
 
-- [ ] **Step 1: Write failing atomic and workspace tests**
-
-Use `TemporaryDirectory` exclusively. Assert the exact standard directory tree, fsync-and-replace behavior, recovery from a simulated interrupted temporary write, refusal to overwrite an existing source résumé, and byte-for-byte hash preservation.
-
-```python
-def test_resume_is_preserved_without_overwrite(self):
-    source = self.temp / "Synthetic_Resume.txt"
-    source.write_bytes(b"Synthetic candidate experience\n")
-    paths = create_workspace(self.root)
-    first = preserve_source_resume(source, paths)
-    second = preserve_source_resume(source, paths)
-    self.assertEqual(first.sha256, second.sha256)
-    self.assertEqual(first.destination.read_bytes(), source.read_bytes())
-```
-
-- [ ] **Step 2: Run tests and verify failure**
-
-Run: `python3 -m unittest tests.unit.test_atomic tests.unit.test_workspace tests.unit.test_schema -v`  
-Expected: FAIL because the state and workspace interfaces are absent.
-
-- [ ] **Step 3: Implement typed contracts and schemas**
-
-Define schema version `1`; connector decisions `connected | declined | unavailable`; onboarding stages from `privacy` through `active`; per-source checkpoint status; and packet stage values from `selected` through `ready`. Require timezone, Linear destination, approved profile flags, packet defaults, source capabilities, and relative workspace subpaths in `config.json`.
-
-- [ ] **Step 4: Implement safe workspace and state operations**
-
-Reject roots that resolve inside the plugin repository, create only the spec's directories, use `Path.resolve()` plus containment checks, write via a same-directory temporary file followed by `os.replace`, and preserve every existing application version. Record the original résumé's source filename, destination, size, and SHA-256 without persisting its extracted text in config.
-
-- [ ] **Step 5: Run deterministic verification**
-
-Run: `python3 -m unittest tests.unit.test_atomic tests.unit.test_workspace tests.unit.test_schema -v`  
-Expected: PASS.
-
-Run: `python3 scripts/init_workspace.py --root "$(mktemp -d)/Synthetic-Career" --dry-run`  
-Expected: prints only relative directories and performs no writes.
-
-- [ ] **Step 6: Commit workspace foundations**
+Run the focused tests, plugin validation, and privacy scan.
 
 ```bash
-git add schemas src/career_pipeline scripts/init_workspace.py scripts/validate_workspace.py tests/unit
-git commit -m "feat: add private workspace and atomic state contracts"
+python3 -m unittest tests.unit.test_workspace tests.unit.test_schema tests.unit.test_job_contract -v
+python3 scripts/validate_plugin.py .
+python3 scripts/scan_private_data.py .
+git add src/career_pipeline/contracts.py src/career_pipeline/workspace.py src/career_pipeline/schema.py schemas scripts/init_workspace.py scripts/validate_workspace.py tests/unit/test_workspace.py tests/unit/test_schema.py tests/unit/test_job_contract.py
+git commit -m "feat: define local workspace contract"
 ```
 
----
-
-### Task 3: Resumable onboarding, Linear requirement, and optional connectors
+## Task 2: Build the canonical job store and lock
 
 **Files:**
-- Create: `src/career_pipeline/onboarding.py`
-- Create: `src/career_pipeline/capabilities.py`
+
+- Modify: `src/career_pipeline/atomic.py`
+- Create: `src/career_pipeline/job_store.py`
+- Create: `tests/unit/test_job_store.py`
+- Create: `tests/integration/test_job_store_recovery.py`
+- Create: `scripts/create_job.py`
+- Create: `scripts/update_job_status.py`
+
+### Step 1: Write failing job-store tests
+
+Cover:
+
+- lock acquisition and release;
+- rejection of concurrent mutation while the lock is held;
+- allocation of `JOB-000001`, then `JOB-000002`;
+- non-reuse after a failed or abandoned allocation;
+- a complete canonical folder containing `job.json`, `posting.md`, `assessment.md`, `events.jsonl`, and `working/`;
+- temporary-folder cleanup after interrupted creation;
+- readback validation before success;
+- status changes that atomically rewrite `job.json` and append exactly one event;
+- idempotent repeated status updates;
+- rejection of invalid statuses and paths; and
+- preservation of canonical folders for `not_pursuing` and `closed` records.
+
+Run:
+
+```bash
+python3 -m unittest tests.unit.test_job_store tests.integration.test_job_store_recovery -v
+```
+
+Expected: FAIL because `job_store.py` does not exist.
+
+### Step 2: Implement mutation primitives
+
+Add a short-lived exclusive lock under `State/`. Use atomic state replacement, a same-filesystem temporary job directory, fsync, rename, and canonical readback. Increment `next-job-id.json` before creating the folder so IDs cannot be reused after failure. Store only relative paths in job records and validate resolved paths remain under the workspace.
+
+Append compact JSON Lines events with event type, timestamp, prior status, resulting status, and synthetic-safe metadata. Do not copy posting bodies or private evidence into events.
+
+### Step 3: Verify and commit
+
+```bash
+python3 -m unittest tests.unit.test_job_store tests.integration.test_job_store_recovery -v
+python3 scripts/scan_private_data.py .
+git add src/career_pipeline/atomic.py src/career_pipeline/job_store.py scripts/create_job.py scripts/update_job_status.py tests/unit/test_job_store.py tests/integration/test_job_store_recovery.py
+git commit -m "feat: add canonical local job store"
+```
+
+## Task 3: Add disposable local indexes
+
+**Files:**
+
+- Create: `src/career_pipeline/indexes.py`
+- Create: `schemas/backlog-index.schema.json`
+- Create: `schemas/deduplication-index.schema.json`
+- Create: `tests/unit/test_indexes.py`
+- Create: `tests/integration/test_index_regeneration.py`
+- Create: `scripts/rebuild_indexes.py`
+
+### Step 1: Write failing index tests
+
+Build synthetic canonical folders and assert:
+
+- `backlog.json` includes all canonical records in a stable ordering with summary fields only;
+- `deduplication.json` includes requisition and conservative fallback identities;
+- closed, not-pursuing, and legacy records still block accidental duplicate creation;
+- missing indexes regenerate;
+- invalid JSON, invalid schema, stale job hashes, and unknown job IDs trigger a complete rebuild;
+- rebuild does not modify any canonical folder bytes; and
+- atomic replacement never exposes a partial index.
+
+Run:
+
+```bash
+python3 -m unittest tests.unit.test_indexes tests.integration.test_index_regeneration -v
+```
+
+Expected: FAIL because the index module does not exist.
+
+### Step 2: Implement regeneration and lookup
+
+Scan `Jobs/JOB-[0-9]{6}/job.json`, validate each snapshot, derive both indexes, and atomically replace them. Include a deterministic source hash or per-record hash so staleness is detectable. Make read helpers repair indexes rather than treating index contents as authority.
+
+### Step 3: Verify and commit
+
+```bash
+python3 -m unittest tests.unit.test_indexes tests.integration.test_index_regeneration tests.unit.test_dedupe -v
+python3 scripts/scan_private_data.py .
+git add src/career_pipeline/indexes.py schemas/backlog-index.schema.json schemas/deduplication-index.schema.json scripts/rebuild_indexes.py tests/unit/test_indexes.py tests/integration/test_index_regeneration.py
+git commit -m "feat: add regenerable job indexes"
+```
+
+## Task 4: Make onboarding and activation connector-optional
+
+**Files:**
+
+- Modify: `src/career_pipeline/capabilities.py`
+- Modify: `src/career_pipeline/onboarding.py`
+- Modify: `src/career_pipeline/readiness.py`
+- Modify: `src/career_pipeline/automation_policy.py`
+- Modify: `schemas/onboarding-state.schema.json`
+- Modify: `scripts/check_readiness.py`
+- Modify: `scripts/render_automation_prompt.py`
+- Modify: `tests/unit/test_onboarding.py`
+- Modify: `tests/unit/test_readiness.py`
+- Modify: `tests/unit/test_automation_policy.py`
+- Modify: `tests/integration/test_onboarding_scenarios.py`
+- Modify: `tests/integration/test_activation.py`
+
+### Step 1: Replace prototype expectations with failing local-first tests
+
+Assert:
+
+- onboarding presents one `connectors` stage rather than a required Linear stage;
+- Linear may be connected, declined, or unavailable like any other connector;
+- every connector decision and observed capability survives resumption;
+- activation succeeds with every connector declined when a public discovery lane is usable;
+- activation fails for unapproved profile/criteria, incomplete local workspace, invalid timezone, invalid packet defaults, or no discovery lane;
+- readiness verifies a safe lock round-trip, canonical job-store read/write test, and index regeneration;
+- discovery automation refers to canonical local storage and not Linear;
+- lifecycle automation writes derived status locally; and
+- `prepare_application` remains forbidden as an automation kind.
+
+Run:
+
+```bash
+python3 -m unittest tests.unit.test_onboarding tests.unit.test_readiness tests.unit.test_automation_policy tests.integration.test_onboarding_scenarios tests.integration.test_activation -v
+```
+
+Expected: FAIL on the old Linear gate and prompts.
+
+### Step 2: Implement optional connector readiness
+
+Remove `linear_required` and `linear_destination_missing`. Rename connector group constants so they do not imply Linear authority. Require a recorded decision for every connector offered in the current plugin version, while allowing a newly added connector to be introduced through a resumable onboarding/update step. Check actual discovery capabilities rather than installation labels.
+
+### Step 3: Verify and commit
+
+```bash
+python3 -m unittest tests.unit.test_onboarding tests.unit.test_readiness tests.unit.test_automation_policy tests.integration.test_onboarding_scenarios tests.integration.test_activation -v
+python3 scripts/validate_plugin.py .
+python3 scripts/scan_private_data.py .
+git add src/career_pipeline/capabilities.py src/career_pipeline/onboarding.py src/career_pipeline/readiness.py src/career_pipeline/automation_policy.py schemas/onboarding-state.schema.json scripts/check_readiness.py scripts/render_automation_prompt.py tests/unit/test_onboarding.py tests/unit/test_readiness.py tests/unit/test_automation_policy.py tests/integration/test_onboarding_scenarios.py tests/integration/test_activation.py
+git commit -m "feat: make every connector optional"
+```
+
+## Task 5: Deliver discovery and backlog to local canonical state
+
+**Files:**
+
+- Modify: `src/career_pipeline/checkpoints.py`
+- Modify: `src/career_pipeline/dedupe.py`
+- Create: `src/career_pipeline/discovery.py`
+- Modify: `src/career_pipeline/backlog.py`
+- Modify: `src/career_pipeline/reporting.py`
+- Modify: `schemas/discovery-state.schema.json`
+- Modify: `scripts/plan_discovery.py`
+- Remove after replacement: `scripts/build_linear_issue.py`
+- Remove after replacement: `scripts/record_linear_delivery.py`
+- Modify: `tests/integration/test_discovery_delivery.py`
+- Modify: `tests/integration/test_cross_source_discovery.py`
+- Modify: `tests/integration/test_review_backlog.py`
+- Create: `tests/e2e/test_local_discovery.py`
+
+### Step 1: Write failing local-delivery tests
+
+Use Greenhouse, Lever, Ashby, and generic synthetic fixtures. Assert that discovery:
+
+- rebuilds its duplicate baseline from canonical folders;
+- filters clear non-matches into run evidence without allocating IDs;
+- creates all qualifying novel roles locally;
+- repeats duplicate lookup while holding the workspace lock;
+- reads each new canonical record back before reporting success;
+- commits successful source checkpoints independently;
+- does not advance failed source state;
+- records a stable batch of local job IDs;
+- remains quiet on unchanged results and repeated failures; and
+- supports backlog compare, deadline surfacing, and not-pursuing updates without any connector.
+
+Run:
+
+```bash
+python3 -m unittest tests.integration.test_discovery_delivery tests.integration.test_cross_source_discovery tests.integration.test_review_backlog tests.e2e.test_local_discovery -v
+```
+
+Expected: FAIL because discovery still models Linear delivery.
+
+### Step 2: Implement local discovery orchestration
+
+Compose existing source, evaluation, dedupe, checkpoint, job-store, and index helpers. Keep judgment inputs explicit and deterministic persistence mechanical. Write run evidence before checkpoint completion. Replace `deliveries` with canonical local job mappings or the stable review batch; do not retain an external issue identity in discovery state.
+
+### Step 3: Verify and commit
+
+```bash
+python3 -m unittest tests.unit.sources tests.unit.test_evaluation tests.unit.test_dedupe tests.unit.test_checkpoints tests.integration.test_discovery_delivery tests.integration.test_cross_source_discovery tests.integration.test_review_backlog tests.e2e.test_local_discovery -v
+python3 scripts/scan_private_data.py .
+git add src/career_pipeline/checkpoints.py src/career_pipeline/dedupe.py src/career_pipeline/discovery.py src/career_pipeline/backlog.py src/career_pipeline/reporting.py schemas/discovery-state.schema.json scripts tests/integration/test_discovery_delivery.py tests/integration/test_cross_source_discovery.py tests/integration/test_review_backlog.py tests/e2e/test_local_discovery.py
+git commit -m "feat: deliver discovery to local job folders"
+```
+
+## Task 6: Bind immediate packets to canonical local jobs
+
+**Files:**
+
+- Modify: `src/career_pipeline/packets.py`
+- Modify: `src/career_pipeline/backlog.py`
+- Modify: `schemas/application-manifest.schema.json`
+- Modify: `scripts/start_packet.py`
+- Modify: `scripts/update_packet.py`
+- Modify: `scripts/verify_packet_files.py`
+- Modify: `tests/unit/test_packets.py`
+- Modify: `tests/integration/test_prepare_application.py`
+- Modify: `tests/integration/test_packet_resumption.py`
+- Modify: `tests/e2e/test_immediate_packets.py`
+
+### Step 1: Write failing local packet tests
+
+Assert:
+
+- selections require exact existing local `JOB-000123` records and a current explicit request;
+- the first mutation sets canonical status to `prepare_application` and appends an event;
+- version allocation is local, monotonic, and resumable;
+- manifest paths are workspace-relative rather than absolute;
+- final PDFs remain directly browseable in the application version folder;
+- no upload or connector receipt is required for `packet_ready`;
+- final hashes and paths are read back into the manifest and canonical `job.json`;
+- a failed optional export cannot block `packet_ready`;
+- repeated or interrupted stages do not duplicate versions, events, or artifacts; and
+- multi-job requests preserve user order and role-specific instructions.
+
+Run:
+
+```bash
+python3 -m unittest tests.unit.test_packets tests.integration.test_prepare_application tests.integration.test_packet_resumption tests.e2e.test_immediate_packets -v
+```
+
+Expected: FAIL because prototype packet stages require upload and Linear delivery verification.
+
+### Step 2: Implement local delivery stages
+
+Use stages `selected`, `posting_verified`, `drafted`, `quality_checked`, `saved`, `local_verified`, and `ready`. Resolve manifest paths through the approved workspace root. After local artifact verification, update the canonical job snapshot and events under the workspace lock, then mark the manifest ready. Preserve every delivered version.
+
+### Step 3: Verify and commit
+
+```bash
+python3 -m unittest tests.unit.test_packets tests.unit.test_quality tests.integration.test_prepare_application tests.integration.test_packet_resumption tests.e2e.test_immediate_packets -v
+python3 scripts/scan_private_data.py .
+git add src/career_pipeline/packets.py src/career_pipeline/backlog.py schemas/application-manifest.schema.json scripts/start_packet.py scripts/update_packet.py scripts/verify_packet_files.py tests/unit/test_packets.py tests/integration/test_prepare_application.py tests/integration/test_packet_resumption.py tests/e2e/test_immediate_packets.py
+git commit -m "feat: deliver packets through local canonical state"
+```
+
+## Task 7: Reconcile lifecycle evidence into local status
+
+**Files:**
+
+- Modify: `src/career_pipeline/reconciliation.py`
+- Modify: `schemas/lifecycle-receipt.schema.json`
+- Modify: `scripts/record_lifecycle_evidence.py`
+- Modify: `tests/unit/test_reconciliation.py`
+- Modify: `tests/integration/test_lifecycle_automation.py`
+
+### Step 1: Adapt the uncommitted tests first
+
+Cover clear application confirmation, rejection, interview, and offer evidence tied to an exact local job. Cover ambiguous employer-only evidence, contradictions, duplicates by opaque source hash, missing canonical jobs, invalid status transitions, and permission limits. Assert full message/calendar bodies are never persisted.
+
+Run:
+
+```bash
+python3 -m unittest tests.unit.test_reconciliation tests.integration.test_lifecycle_automation -v
+```
+
+Expected: FAIL until the existing work writes canonical local status instead of describing a Linear update.
+
+### Step 2: Implement local reconciliation
+
+Retain the existing classifier where correct. Resolve the exact canonical job, append a minimal receipt under `Runs/lifecycle/`, and perform the local status mutation under the workspace lock. Route ambiguity and contradiction to user review without mutating status.
+
+### Step 3: Verify and commit
+
+```bash
+python3 -m unittest tests.unit.test_reconciliation tests.integration.test_lifecycle_automation -v
+python3 scripts/scan_private_data.py .
+git add src/career_pipeline/reconciliation.py schemas/lifecycle-receipt.schema.json scripts/record_lifecycle_evidence.py tests/unit/test_reconciliation.py tests/integration/test_lifecycle_automation.py
+git commit -m "feat: reconcile lifecycle into local job state"
+```
+
+## Task 8: Isolate optional exports from canonical workflows
+
+**Files:**
+
+- Create: `src/career_pipeline/exports.py`
+- Rename or replace: `src/career_pipeline/linear_delivery.py`
+- Replace: `schemas/linear-delivery-receipt.schema.json`
+- Create: `schemas/export-receipt.schema.json`
+- Create: `scripts/build_export.py`
+- Create: `scripts/record_export_receipt.py`
+- Modify: `tests/unit/test_linear_delivery.py`
+- Modify: `tests/integration/test_discovery_delivery.py`
+- Create: `tests/integration/test_optional_exports.py`
+
+### Step 1: Write failing export-boundary tests
+
+Assert that:
+
+- export cannot run without an explicit current user request;
+- export reads an existing canonical job or verified packet and never creates a local identity;
+- a Linear payload may reference the local job ID but cannot become its status authority;
+- successful readback appends a compact optional receipt to the canonical record;
+- export errors leave canonical status, packet readiness, indexes, and checkpoints unchanged;
+- retry is idempotent using destination plus exported content hash; and
+- declining or lacking Linear has no effect on any core test.
+
+Run:
+
+```bash
+python3 -m unittest tests.unit.test_linear_delivery tests.integration.test_optional_exports -v
+```
+
+Expected: FAIL because the current module treats Linear issue creation as discovery delivery.
+
+### Step 2: Implement the export adapter
+
+Keep destination-specific payload shaping separate from local persistence. Require caller-supplied proof of explicit request. Store only destination kind, opaque destination ID, timestamp, content hash, artifact hashes where applicable, and verified outcome. Never store credentials or complete private drafts.
+
+### Step 3: Verify and commit
+
+```bash
+python3 -m unittest tests.unit.test_linear_delivery tests.integration.test_optional_exports tests.integration.test_discovery_delivery -v
+python3 scripts/scan_private_data.py .
+git add src/career_pipeline/exports.py src/career_pipeline/linear_delivery.py schemas/linear-delivery-receipt.schema.json schemas/export-receipt.schema.json scripts/build_export.py scripts/record_export_receipt.py tests/unit/test_linear_delivery.py tests/integration/test_optional_exports.py tests/integration/test_discovery_delivery.py
+git commit -m "feat: isolate optional connector exports"
+```
+
+## Task 9: Rewrite plugin instructions around local authority
+
+**Files:**
+
 - Modify: `skills/onboard/SKILL.md`
-- Create: `skills/onboard/agents/openai.yaml`
-- Create: `skills/onboard/references/privacy-and-consent.md`
-- Create: `skills/onboard/references/connectors.md`
-- Create: `skills/onboard/references/interview.md`
-- Create: `skills/onboard/assets/Career_Profile.template.md`
-- Create: `skills/onboard/assets/Search_Criteria.template.md`
-- Create: `skills/onboard/assets/Writing_Preferences.template.md`
-- Create: `tests/unit/test_onboarding.py`
-- Create: `tests/integration/test_onboarding_scenarios.py`
-- Create: `tests/fixtures/synthetic/onboarding/*.json`
-- Create: `tests/fixtures/synthetic/resume/Synthetic_Resume.txt`
-
-**Interfaces:**
-- Consumes: `WorkspacePaths`, `atomic_write_json`, and schema validation from Task 2.
-- Produces: `record_connector_decision(state, connector, decision, capabilities) -> OnboardingState`
-- Produces: `advance_onboarding(state, completed_stage, receipt) -> OnboardingState`
-- Produces: `record_profile_approval(state, profile_hash, criteria_hash) -> OnboardingState`
-- Produces: a capability matrix keyed by `linear`, `indeed`, `linkedin`, `firecrawl`, `browser`, `notion`, `github`, `gmail`, `google-calendar`, `google-drive`, and `usajobs`.
-
-- [ ] **Step 1: Write failing onboarding state tests**
-
-Cover complete onboarding, interruption after every stage, resume from the recorded next stage, Linear unavailable, every optional connector declined independently, a connector installed without its expected action, and a correction that supersedes résumé-derived text.
-
-```python
-def test_optional_decline_does_not_block_progress(self):
-    state = synthetic_state_at("optional_connectors")
-    next_state = record_connector_decision(
-        state, "notion", "declined", capabilities=[]
-    )
-    self.assertEqual(next_state.connectors["notion"].decision, "declined")
-    self.assertEqual(next_state.stage, "optional_connectors")
-
-def test_linear_decline_blocks_activation(self):
-    state = synthetic_ready_state(linear="declined")
-    self.assertIn("linear_required", readiness_failures(state))
-```
-
-- [ ] **Step 2: Run onboarding tests and verify failure**
-
-Run: `python3 -m unittest tests.unit.test_onboarding tests.integration.test_onboarding_scenarios -v`  
-Expected: FAIL because the state machine and Onboard skill are absent.
-
-- [ ] **Step 3: Implement resumable onboarding state**
-
-Persist a receipt after each completed stage. Make stage transitions monotonic except explicit correction loops. Store connector choice separately from tested actions; an installed connector with missing required actions is `unavailable`, not `connected`. Preserve declines across resumed runs.
-
-- [ ] **Step 4: Write the Onboard skill and progressive references**
-
-The entry skill starts from “Set up my job search,” accurately explains local and third-party processing, requests approval for the root before creating it, and handles connectors one at a time. The Linear section verifies issue search/create/read, labels, views, comments, and attachment actions in the selected existing workspace/team/project. Each optional connector section states benefit, intended access, fallback, connect/skip choice, and observed capabilities without overstating coverage.
-
-- [ ] **Step 5: Add résumé, interview, and explicit approval flow**
-
-Copy the source résumé unchanged, derive a draft evidence inventory, ask the approved interview topics, and write the three profile documents from synthetic-free templates. Require the user to correct and explicitly approve both career profile and search criteria; later corrections replace conflicting résumé-derived assumptions and update approval hashes.
-
-- [ ] **Step 6: Run onboarding verification**
-
-Run: `python3 -m unittest tests.unit.test_onboarding tests.integration.test_onboarding_scenarios -v`  
-Expected: PASS for connected, declined, unavailable, interrupted, resumed, corrected, and approval-gated scenarios.
-
-Run: `python3 scripts/scan_private_data.py .`  
-Expected: PASS; all fixture identities are declared synthetic and no fixture resembles real application material.
-
-- [ ] **Step 7: Commit onboarding**
-
-```bash
-git add src/career_pipeline skills/onboard tests
-git commit -m "feat: add resumable private onboarding"
-```
-
----
-
-### Task 4: Readiness and approved automation activation
-
-**Files:**
-- Create: `src/career_pipeline/readiness.py`
-- Create: `src/career_pipeline/automation_policy.py`
-- Create: `skills/onboard/references/readiness-and-activation.md`
-- Create: `skills/onboard/assets/discovery-automation-prompt.md`
-- Create: `skills/onboard/assets/lifecycle-automation-prompt.md`
-- Create: `scripts/check_readiness.py`
-- Create: `scripts/render_automation_prompt.py`
-- Create: `tests/unit/test_readiness.py`
-- Create: `tests/unit/test_automation_policy.py`
-- Create: `tests/integration/test_activation.py`
-
-**Interfaces:**
-- Consumes: approved hashes, connector decisions, paths, and schedule values from Tasks 2–3.
-- Produces: `check_readiness(config, onboarding, capabilities) -> ReadinessReport`
-- Produces: `render_automation(kind: Literal["discovery", "lifecycle"], config) -> str`
-- Produces: `automation_allowed(kind, readiness) -> bool`; every other kind raises `UnsupportedAutomation`.
-
-- [ ] **Step 1: Write failing readiness and automation tests**
-
-Assert activation fails for missing Linear actions, missing approved profile/criteria, unwritable workspace, invalid timezone, and zero usable discovery sources. Assert discovery defaults to two weekday runs in the user's timezone, lifecycle is offered only with Gmail or Calendar, and any `prepare_application` schedule request is rejected.
-
-```python
-def test_packet_automation_is_impossible(self):
-    with self.assertRaises(UnsupportedAutomation):
-        render_automation("prepare_application", synthetic_ready_config())
-
-def test_activation_requires_explicit_profile_approval(self):
-    report = check_readiness(config, onboarding_without_approval(), capabilities)
-    self.assertIn("profile_not_approved", report.failure_codes)
-```
-
-- [ ] **Step 2: Run tests and confirm failure**
-
-Run: `python3 -m unittest tests.unit.test_readiness tests.unit.test_automation_policy tests.integration.test_activation -v`  
-Expected: FAIL because readiness and policy modules are absent.
-
-- [ ] **Step 3: Implement readiness with actionable failures**
-
-Return stable failure codes plus user-facing remediation. Verify local files, safe resolved paths, Linear destination/capabilities, at least one discovery lane, connector decisions, timezone, packet defaults, and approval hashes. Do not infer readiness from a résumé alone.
-
-- [ ] **Step 4: Implement automation prompt policy**
-
-Render cohesive user-visible prompts from configuration without embedding personal content. Discovery prompts invoke the Discover jobs skill and stay quiet on unchanged/no-result runs. Lifecycle prompts reconcile only when enabled and stay quiet without a clear change or action. The allowed-kind enum deliberately has no packet member.
-
-- [ ] **Step 5: Update Onboard activation instructions**
-
-After a passing readiness report, show the selected cadence and ask one explicit approval before using the Codex automation tool. Record returned automation identifiers only after readback. Do not create an automation when the user merely approves the profile.
-
-- [ ] **Step 6: Verify Milestone 1**
-
-Run: `python3 -m unittest discover -s tests -p 'test_*.py' -v`  
-Expected: all shell and onboarding tests PASS.
-
-Run: `python3 scripts/check_readiness.py --fixture tests/fixtures/synthetic/onboarding/ready.json`  
-Expected: exit 0 with `ready: true`.
-
-Run: `python3 scripts/validate_plugin.py .`  
-Expected: PASS with the four valid skill entrypoints.
-
-- [ ] **Step 7: Commit readiness and activation**
-
-```bash
-git add src/career_pipeline skills/onboard scripts tests
-git commit -m "feat: gate activation and safe discovery schedules"
-```
-
----
-
-### Task 5: Normalized sources and public ATS adapters
-
-**Files:**
-- Create: `schemas/job-candidate.schema.json`
-- Create: `src/career_pipeline/sources/__init__.py`
-- Create: `src/career_pipeline/sources/base.py`
-- Create: `src/career_pipeline/sources/greenhouse.py`
-- Create: `src/career_pipeline/sources/lever.py`
-- Create: `src/career_pipeline/sources/ashby.py`
-- Create: `src/career_pipeline/sources/generic.py`
-- Create: `scripts/normalize_jobs.py`
-- Create: `tests/unit/sources/test_greenhouse.py`
-- Create: `tests/unit/sources/test_lever.py`
-- Create: `tests/unit/sources/test_ashby.py`
-- Create: `tests/unit/sources/test_generic.py`
-- Create: `tests/fixtures/synthetic/postings/*.json`
-
-**Interfaces:**
-- Produces: `SourceSnapshot(source, fetched_at, records, cursor, success)`
-- Produces: `normalize(snapshot: SourceSnapshot) -> list[CandidateJob]`
-- `CandidateJob` requires source, source record ID, ATS/requisition ID when present, employer, exact title, responsibilities, location, workplace model, travel, compensation evidence, posting URL, application URL, posted/updated timestamps, and verification status.
-- Consumes: schema validation from Task 2.
-
-- [ ] **Step 1: Write adapter contract tests**
-
-Create fictional Greenhouse, Lever, Ashby, Indeed-like, browser, and public-search snapshots. Assert consistent normalized fields, HTML cleanup, exact source attribution, distinct posting/application URLs, missing-field uncertainty, and no invented compensation or workplace model.
-
-- [ ] **Step 2: Run source tests and verify failure**
-
-Run: `python3 -m unittest discover -s tests/unit/sources -p 'test_*.py' -v`  
-Expected: FAIL because the normalized source package is absent.
-
-- [ ] **Step 3: Implement snapshot-only adapters**
-
-Adapters transform retrieved payloads; they do not contain credentials, authenticated sessions, analytics, or hidden network calls. Public source retrieval remains a skill/tool concern. Preserve source record IDs and raw-field hashes so later runs can recognize changed requisitions without storing unnecessary full-page content.
-
-- [ ] **Step 4: Add normalization CLI and schema validation**
-
-Accept a source type plus input/output paths, write normalized JSON atomically, and report rejected records with source-local indexes. Never advance a checkpoint from this CLI.
-
-- [ ] **Step 5: Run source verification**
-
-Run: `python3 -m unittest discover -s tests/unit/sources -p 'test_*.py' -v`  
-Expected: PASS for all four adapter families and missing-field cases.
-
-- [ ] **Step 6: Commit source normalization**
-
-```bash
-git add schemas src/career_pipeline/sources scripts/normalize_jobs.py tests
-git commit -m "feat: normalize synthetic ATS and connector job records"
-```
-
----
-
-### Task 6: Evidence-backed assessment, deduplication, and source checkpoints
-
-**Files:**
-- Create: `schemas/job-assessment.schema.json`
-- Create: `src/career_pipeline/evaluation.py`
-- Create: `src/career_pipeline/dedupe.py`
-- Create: `src/career_pipeline/checkpoints.py`
-- Create: `scripts/plan_discovery.py`
-- Create: `tests/unit/test_evaluation.py`
-- Create: `tests/unit/test_dedupe.py`
-- Create: `tests/unit/test_checkpoints.py`
-- Create: `tests/integration/test_cross_source_discovery.py`
-
-**Interfaces:**
-- Produces: `validate_assessment(job, profile, assessment) -> list[ValidationError]`
-- Produces: `requisition_key(job) -> str | None`
-- Produces: `fallback_fingerprint(job) -> str`
-- Produces: `partition_candidates(candidates, existing) -> DiscoveryPartition`
-- Produces: `complete_source(state, source, result) -> DiscoveryState`
-- An assessment disposition is exactly `strong_match | worth_considering | non_match`.
-
-- [ ] **Step 1: Write failing evaluation and dedupe tests**
-
-Cover responsibility-first evaluation, evidence-supported strengths, explicit gaps, compensation/geography uncertainty, ATS-ID duplicates across sources, conservative company/title/location/team fallback, archived Linear records, changed requisitions, closed roles, and reposts.
-
-```python
-def test_same_requisition_across_sources_is_duplicate(self):
-    ats = synthetic_job(source="greenhouse", requisition_id="SYN-204")
-    broad = synthetic_job(source="public-search", requisition_id="SYN-204")
-    self.assertEqual(requisition_key(ats), requisition_key(broad))
-
-def test_failed_source_does_not_advance_checkpoint(self):
-    before = synthetic_discovery_state()
-    after = complete_source(before, "indeed", failed_source_result())
-    self.assertEqual(after.sources["indeed"], before.sources["indeed"])
-```
-
-- [ ] **Step 2: Run tests and confirm failure**
-
-Run: `python3 -m unittest tests.unit.test_evaluation tests.unit.test_dedupe tests.unit.test_checkpoints tests.integration.test_cross_source_discovery -v`  
-Expected: FAIL because evaluation, dedupe, and checkpoint modules are absent.
-
-- [ ] **Step 3: Implement validation and conservative identity**
-
-Require every positive fit claim to reference a profile evidence identifier and every uncertainty to remain explicit. Prefer normalized ATS/requisition identity; otherwise normalize Unicode/case/spacing and hash employer, exact title, location, and team. Never collapse records solely because titles resemble one another.
-
-- [ ] **Step 4: Implement independent checkpoint transitions**
-
-A source advances its last-successful timestamp, seen-record set, and rotation cursor only after successful normalization and durable run evidence. Partial or failed lanes retain their prior checkpoint. Build a stable review-batch ID from ordered qualifying candidate keys.
-
-- [ ] **Step 5: Run discovery-core verification**
-
-Run: `python3 -m unittest tests.unit.test_evaluation tests.unit.test_dedupe tests.unit.test_checkpoints tests.integration.test_cross_source_discovery -v`  
-Expected: PASS, including cross-source duplicates, closed/reposted roles, and failed checkpoints.
-
-- [ ] **Step 6: Commit discovery core**
-
-```bash
-git add schemas src/career_pipeline scripts/plan_discovery.py tests
-git commit -m "feat: add evidence checks dedupe and source checkpoints"
-```
-
----
-
-### Task 7: Linear delivery, Discover jobs, and Review backlog
-
-**Files:**
-- Create: `schemas/linear-delivery-receipt.schema.json`
-- Create: `src/career_pipeline/linear_delivery.py`
+- Modify: `skills/onboard/references/*.md`
+- Modify: `skills/onboard/assets/*automation-prompt.md`
 - Modify: `skills/discover-jobs/SKILL.md`
-- Create: `skills/discover-jobs/agents/openai.yaml`
-- Create: `skills/discover-jobs/references/source-routing.md`
-- Create: `skills/discover-jobs/references/evaluation-and-delivery.md`
+- Modify: `skills/discover-jobs/references/*.md`
+- Remove: `skills/discover-jobs/assets/Linear_Issue.template.md`
 - Modify: `skills/review-backlog/SKILL.md`
-- Create: `skills/review-backlog/agents/openai.yaml`
-- Create: `skills/review-backlog/references/backlog-actions.md`
-- Create: `skills/discover-jobs/assets/Linear_Issue.template.md`
-- Create: `scripts/build_linear_issue.py`
-- Create: `scripts/record_linear_delivery.py`
-- Create: `tests/unit/test_linear_delivery.py`
-- Create: `tests/integration/test_discovery_delivery.py`
-- Create: `tests/integration/test_review_backlog.py`
-- Create: `tests/fixtures/synthetic/linear/*.json`
-
-**Interfaces:**
-- Consumes: candidates, assessments, dedupe keys, checkpoints, readiness, and configured Linear destination.
-- Produces: `build_issue_payload(job, assessment, config) -> LinearIssuePayload`
-- Produces: `verify_issue_readback(expected, actual) -> DeliveryReceipt`
-- Produces: `record_delivery(state, receipt) -> DiscoveryState`
-- Review backlog produces explicit `PacketSelection(ticket_ids, per_role_instructions)` only from the user's current request.
-
-- [ ] **Step 1: Write failing Linear and backlog tests**
-
-Use a fake Linear gateway. Assert exact required labels/views, final duplicate lookup immediately before create, archived-record coverage, readback before delivery state, all qualifying new roles delivered, non-matches kept local, unchanged runs quiet, and actionable source failures reported once.
-
-- [ ] **Step 2: Run tests and confirm failure**
-
-Run: `python3 -m unittest tests.unit.test_linear_delivery tests.integration.test_discovery_delivery tests.integration.test_review_backlog -v`  
-Expected: FAIL because delivery and skill behavior are absent.
-
-- [ ] **Step 3: Implement deterministic issue payloads and receipts**
-
-Include every ticket field from the spec, stable source and re-verification timestamps, disposition label, exact URLs, uncertainty, and recommended next action. Compare created/read-back issue identity, labels, project/team, body hash, and URLs before producing a verified receipt.
-
-- [ ] **Step 4: Write the Discover jobs skill**
-
-Read only approved configuration/profile files; verify the Linear destination; build a duplicate baseline including archived records; route only through enabled and capability-tested lanes; retrieve public ATS content; normalize; verify original posting/application paths; assess responsibilities; deduplicate; perform a final Linear duplicate search; create/read back; then atomically commit checkpoints and the stable batch. Stay quiet when no actionable change exists.
-
-- [ ] **Step 5: Write the Review backlog skill**
-
-Support summaries, comparisons, deadlines, not-pursuing decisions, and one-or-many explicit ticket selections. Resolve exact ticket IDs and invoke immediate Prepare application work in the same conversation. State plainly that labels alone do not wake Codex and that no application is submitted.
-
-- [ ] **Step 6: Verify Milestone 2**
-
-Run: `python3 -m unittest discover -s tests -p 'test_*.py' -v`  
-Expected: all shell, onboarding, source, discovery, and backlog tests PASS.
-
-Run: `python3 scripts/validate_plugin.py .`  
-Expected: PASS with the implemented Onboard, Discover jobs, and Review backlog skills plus the valid bounded Prepare application entrypoint.
-
-Run: `python3 scripts/scan_private_data.py .`  
-Expected: PASS.
-
-- [ ] **Step 7: Commit discovery and backlog**
-
-```bash
-git add schemas src/career_pipeline skills/discover-jobs skills/review-backlog scripts tests
-git commit -m "feat: deliver verified Linear backlog"
-```
-
----
-
-### Task 8: Versioned packet state and local artifact safety
-
-**Files:**
-- Create: `src/career_pipeline/packets.py`
-- Create: `scripts/start_packet.py`
-- Create: `scripts/update_packet.py`
-- Create: `scripts/verify_packet_files.py`
-- Create: `tests/unit/test_packets.py`
-- Create: `tests/integration/test_packet_resumption.py`
-- Create: `tests/fixtures/synthetic/packets/*.json`
-
-**Interfaces:**
-- Consumes: `WorkspacePaths`, atomic state, exact Linear ticket identity, and application manifest schema.
-- Produces: `start_packet(ticket, workspace, options) -> PacketRecord`
-- Produces: `advance_packet(manifest, ticket_id, stage, receipt) -> ApplicationManifest`
-- Produces: `resume_queue(manifest) -> list[PacketRecord]`
-- Produces: `verify_local_artifacts(record) -> ArtifactVerification`
-- Packet stages are monotonic: `selected`, `posting_verified`, `drafted`, `quality_checked`, `saved`, `uploaded`, `delivery_verified`, `ready`.
-
-- [ ] **Step 1: Write failing packet-path and state tests**
-
-Assert `v001` allocation, sanitized ticket/company/role names, two employer-facing filenames directly in the version folder, private material only in `working/`, no overwrite of a prior version, monotonic transitions, artifact hashes, cover-letter opt-out, and safe restart after every stage.
-
-```python
-def test_final_pdfs_are_easy_to_find(self):
-    record = start_packet(ticket("SYN-123"), workspace, default_options())
-    self.assertEqual(record.version, "v001")
-    self.assertEqual(record.resume_pdf.parent, record.version_dir)
-    self.assertEqual(record.working_dir.parent, record.version_dir)
-
-def test_resume_skips_verified_delivery(self):
-    manifest = manifest_at("delivery_verified")
-    self.assertEqual(resume_queue(manifest), [])
-```
-
-- [ ] **Step 2: Run packet-state tests and verify failure**
-
-Run: `python3 -m unittest tests.unit.test_packets tests.integration.test_packet_resumption -v`  
-Expected: FAIL because packet state handling is absent.
-
-- [ ] **Step 3: Implement safe packet allocation and manifest transitions**
-
-Use a deterministic safe-name policy with collision-resistant suffixes, allocate the next unused version while holding an atomic lock file, and never delete history. Require stage-specific receipts and file SHA-256 values. Make repeating the same transition idempotent and reject skips or conflicting receipts.
-
-- [ ] **Step 4: Implement artifact verification CLI**
-
-Require the final résumé PDF and the cover letter when enabled; forbid extra employer-facing files; verify nonzero size, magic bytes, recorded hash, and direct-parent placement. Keep all extracted text, render images, source snapshots, and review JSON under `working/`.
-
-- [ ] **Step 5: Run packet-state verification**
-
-Run: `python3 -m unittest tests.unit.test_packets tests.integration.test_packet_resumption -v`  
-Expected: PASS at every interrupted stage and for multi-version history.
-
-- [ ] **Step 6: Commit packet state**
-
-```bash
-git add src/career_pipeline scripts tests
-git commit -m "feat: add resumable versioned packet storage"
-```
-
----
-
-### Task 9: Immediate application preparation and verified delivery
-
-**Files:**
+- Modify: `skills/review-backlog/references/backlog-actions.md`
 - Modify: `skills/prepare-application/SKILL.md`
-- Create: `skills/prepare-application/agents/openai.yaml`
-- Create: `skills/prepare-application/references/tailoring.md`
-- Create: `skills/prepare-application/references/quality-gates.md`
-- Create: `skills/prepare-application/references/linear-delivery.md`
-- Create: `skills/prepare-application/assets/Resume.template.md`
-- Create: `skills/prepare-application/assets/Cover_Letter.template.md`
-- Create: `tests/integration/test_prepare_application.py`
-- Create: `tests/e2e/test_immediate_packets.py`
-- Create: `tests/fixtures/synthetic/profile/*.md`
+- Modify: `skills/prepare-application/agents/openai.yaml`
+- Replace: `skills/prepare-application/references/linear-delivery.md`
+- Create: `skills/prepare-application/references/local-delivery-and-optional-export.md`
+- Modify: `tests/unit/test_plugin_manifest.py`
 
-**Interfaces:**
-- Consumes: `PacketSelection`, packet state APIs, approved profile/writing files, verified Linear tickets, and Codex document/PDF capabilities.
-- Produces: final résumé and optional cover-letter PDFs, quality receipts, Linear attachment receipts, one concise evidence/gap comment, and verified label transitions.
-- The trigger contract is an explicit current user request containing exact ticket IDs or an explicit selection produced by Review backlog.
+### Step 1: Write failing instruction assertions
 
-- [ ] **Step 1: Write failing immediate-workflow tests**
+Assert every skill states its authority and safety boundary accurately. Search for forbidden operational claims such as required Linear setup, Linear backlog authority, automatic attachment delivery, and lifecycle writes to Linear. Preserve legitimate references that describe an optional user-requested export.
 
-Use fake document, PDF, posting, and Linear gateways. Cover one ticket, multiple tickets, cover-letter opt-out, unavailable posting, factual mismatch, chronology conflict, page-count failure, visual failure, attachment mismatch, interrupted delivery, and “Resume my packet queue.” Assert work begins in the same invocation and no scheduler call exists.
-
-- [ ] **Step 2: Run application tests and verify failure**
-
-Run: `python3 -m unittest tests.integration.test_prepare_application tests.e2e.test_immediate_packets -v`  
-Expected: FAIL because the Prepare application skill is absent.
-
-- [ ] **Step 3: Write tailoring and quality references**
-
-Rank accomplishments by relevance, impact, contribution, scope, distinctiveness, recency, factual support, and rendered space. Require a two-page text-focused ATS-friendly résumé and, by default, a one-page cover letter. Require factual, chronology, tailoring, ATS structure, page-space, extracted-PDF-text, page-count, and rendered visual checks. Apply ATS-specific rules only after verifying the real destination.
-
-- [ ] **Step 4: Write the immediate Prepare application skill**
-
-Resolve tickets and add `Prepare application`; begin work immediately; re-verify posting and application URL; load current approved evidence and per-role instructions; generate documents with the Codex document/PDF capabilities; run every gate; save and hash final PDFs; upload those exact bytes; read attachments back; add one concise comment; set `Packet ready`; and clear `Prepare application` only after verified delivery. Never infer submission and never schedule this workflow.
-
-- [ ] **Step 5: Implement idempotent multi-role and resume behavior**
-
-Process each explicitly selected ticket independently, preserving a manifest entry and failure reason per ticket. On resume, continue from the latest verified stage and reuse matching hashes; do not duplicate versions, attachments, comments, or labels. If the current profile hash differs, stop and ask whether to restart the affected draft as a new version.
-
-- [ ] **Step 6: Verify Milestone 3**
-
-Run: `python3 -m unittest discover -s tests -p 'test_*.py' -v`  
-Expected: all tests PASS, including immediate single/multi-role and every interruption stage.
-
-Run: `python3 scripts/validate_plugin.py .`  
-Expected: PASS with exactly four valid skills.
-
-Run: `python3 scripts/scan_private_data.py .`  
-Expected: PASS.
-
-- [ ] **Step 7: Commit immediate packets**
+Run:
 
 ```bash
-git add skills/prepare-application tests
-git commit -m "feat: prepare and deliver application packets immediately"
+python3 -m unittest tests.unit.test_plugin_manifest -v
+rg -n "Linear is required|required Linear|configured Linear destination|Linear backlog|update the exact Linear|deliver.*to Linear" skills src scripts schemas tests
 ```
 
----
+Expected: tests or the content audit fail until all core-flow wording is local-first.
 
-### Task 10: Optional lifecycle reconciliation
+### Step 2: Rewrite the skill flows
 
-**Files:**
-- Create: `schemas/lifecycle-receipt.schema.json`
-- Create: `src/career_pipeline/reconciliation.py`
-- Create: `skills/onboard/references/lifecycle-reconciliation.md`
-- Modify: `skills/onboard/assets/lifecycle-automation-prompt.md`
-- Create: `scripts/record_lifecycle_evidence.py`
-- Create: `tests/unit/test_reconciliation.py`
-- Create: `tests/integration/test_lifecycle_automation.py`
-- Create: `tests/fixtures/synthetic/lifecycle/*.json`
+Onboarding must offer connectors one at a time and activate with public sources. Discovery must create canonical job folders and rebuild indexes. Review must read local canonical records. Prepare application must start immediately from exact local IDs and complete after verified local delivery. Lifecycle must write clear derived status locally. Optional export must always be introduced as an explicit separate action after local success.
 
-**Interfaces:**
-- Consumes: opted-in Gmail/Calendar capabilities, configured Linear project, exact-role lookup, and lifecycle schema.
-- Produces: `classify_lifecycle_evidence(evidence, candidates) -> LifecycleDecision`
-- Decision values: `apply_update`, `needs_review`, or `ignore`.
-- Produces a minimal receipt with source kind, source-local opaque ID/hash, timestamp, matched ticket, evidence class, decision, and resulting Linear readback; it never stores full mailbox or calendar bodies.
-
-- [ ] **Step 1: Write failing lifecycle tests**
-
-Cover exact confirmations, rejections, interview invitations, offers, ambiguous recruiter messages, employer-generic messages, contradictory messages, wrong-role matches, connector decline, read-only capability, and duplicate unchanged evidence.
-
-- [ ] **Step 2: Run lifecycle tests and verify failure**
-
-Run: `python3 -m unittest tests.unit.test_reconciliation tests.integration.test_lifecycle_automation -v`  
-Expected: FAIL because reconciliation is absent.
-
-- [ ] **Step 3: Implement conservative evidence decisions**
-
-Require exact employer plus role/requisition identity and one unambiguous event class before an automatic Linear update. Route ambiguity or contradiction to user review. Deduplicate on source-local opaque ID/hash. Record only the minimum receipt and preserve connector permission limits.
-
-- [ ] **Step 4: Finalize the optional weekday automation prompt**
-
-Offer one weekday check in the user's timezone only when Gmail or Calendar is enabled. The prompt reads job-related evidence, writes only derived clear status to Linear after readback, and remains quiet when unchanged. It cannot send/reply, accept invitations, create events, or contact anyone.
-
-- [ ] **Step 5: Run lifecycle verification**
-
-Run: `python3 -m unittest tests.unit.test_reconciliation tests.integration.test_lifecycle_automation -v`  
-Expected: PASS for clear, ambiguous, contradictory, declined, and repeated evidence.
-
-- [ ] **Step 6: Commit lifecycle reconciliation**
+### Step 3: Verify and commit
 
 ```bash
-git add schemas src/career_pipeline skills/onboard scripts tests
-git commit -m "feat: add conservative lifecycle reconciliation"
+python3 -m unittest tests.unit.test_plugin_manifest -v
+python3 scripts/validate_plugin.py .
+python3 scripts/scan_private_data.py .
+git add skills tests/unit/test_plugin_manifest.py
+git commit -m "docs: align plugin skills with local authority"
 ```
 
----
-
-### Task 11: Backed-up migrations and update safety
+## Task 10: Add backed-up prototype migration
 
 **Files:**
+
 - Create: `src/career_pipeline/migrations.py`
+- Create or modify: `tests/unit/test_migrations.py`
+- Create or modify: `tests/integration/test_plugin_update.py`
 - Create: `scripts/migrate_workspace.py`
-- Create: `tests/unit/test_migrations.py`
-- Create: `tests/integration/test_plugin_update.py`
-- Create: `tests/fixtures/synthetic/migrations/v1/*.json`
-- Create: `docs/UPGRADING.md`
+- Create: `docs/private-beta-upgrades.md`
 
-**Interfaces:**
-- Consumes: schema versions and atomic state APIs.
-- Produces: `plan_migration(workspace, target_version) -> MigrationPlan`
-- Produces: `apply_migration(plan, confirmation_token) -> MigrationReceipt`
-- A plan lists exact state files, backup directory, source/target versions, reversible operations, and application-history invariants.
+### Step 1: Complete the existing failing migration tests
 
-- [ ] **Step 1: Write failing migration tests**
+Assert dry-run by default, explicit confirmation token, backup before write, rollback after simulated interruption, rejection of future schema versions, and byte-for-byte preservation of source resumes and application history. Add coverage for creating missing `Jobs/` and `Indexes/`, converting configuration away from required Linear, and rebuilding indexes without contacting Linear.
 
-Assert dry-run by default, explicit confirmation token, backup-before-write, rollback after simulated interruption, rejection of unknown future versions, preservation of original résumé and all application versions, and no change to Linear history.
+Do not silently import or delete Linear issues. If a beta user wants existing issues copied locally, document a separate explicit import decision rather than inferring consent.
 
-- [ ] **Step 2: Run migration tests and verify failure**
-
-Run: `python3 -m unittest tests.unit.test_migrations tests.integration.test_plugin_update -v`  
-Expected: FAIL because migration support is absent.
-
-- [ ] **Step 3: Implement migration planning and application**
-
-Write backups beneath the user's `State/backups/<timestamp>/`, hash every input and backup, migrate only known schema documents, and atomically write a receipt. Separate plugin version from workspace schema version so plugin updates never rewrite user content merely because package semver changed.
-
-- [ ] **Step 4: Document safe updates**
-
-Explain private-beta update/reinstall, new-thread pickup, readiness recheck, migration confirmation, backup locations, and recovery. Do not put any user-specific installation path or private repository URL in the document.
-
-- [ ] **Step 5: Run migration verification**
-
-Run: `python3 -m unittest tests.unit.test_migrations tests.integration.test_plugin_update -v`  
-Expected: PASS, including interrupted migration rollback and intact packet history.
-
-- [ ] **Step 6: Commit migration safety**
+Run:
 
 ```bash
-git add src/career_pipeline scripts tests docs/UPGRADING.md
-git commit -m "feat: add backed-up workspace migrations"
+python3 -m unittest tests.unit.test_migrations tests.integration.test_plugin_update -v
 ```
 
----
+Expected: FAIL because `migrations.py` is not yet implemented.
 
-### Task 12: Synthetic end-to-end beta gate and private packaging
+### Step 2: Implement safe migration
 
-**Files:**
-- Create: `tests/e2e/test_private_beta.py`
-- Create: `tests/fixtures/synthetic/README.md`
-- Create: `scripts/package_plugin.py`
-- Create: `README.md`
-- Create: `PRIVACY.md`
-- Create: `SECURITY.md`
-- Create: `docs/BETA_TESTING.md`
-- Create: `CHANGELOG.md`
-- Modify: `pyproject.toml`
+Build a deterministic migration plan, show affected paths, require the plan's token, copy mutable state to a timestamped local backup, apply changes atomically, validate, rebuild indexes, and restore original bytes on any error. Never modify `Sources/Resume_Original.*`, `Applications/`, or canonical job history in place.
 
-**Interfaces:**
-- Consumes: all prior runtime, skill, schema, fixture, migration, and validation interfaces.
-- Produces: `dist/career-pipeline-0.1.0.zip` from an explicit inclusion list.
-- Produces: a machine-readable `dist/career-pipeline-0.1.0.sha256`.
-- Produces: a manual private-beta acceptance checklist requiring no telemetry or automatic feedback.
-
-- [ ] **Step 1: Write the complete synthetic beta test**
-
-Run a fictional user through complete and resumed onboarding, each optional connector choice, Linear gating, discovery across all three ATS adapters and duplicate broad sources, qualifying/non-qualifying delivery, backlog comparison, immediate single/multi-role packets, interrupted resume, clear/ambiguous lifecycle evidence, and migration. Assert final PDFs are directly under the synthetic `Applications/` version folders and no scheduler receives packet work.
-
-- [ ] **Step 2: Run the full suite before packaging**
-
-Run: `python3 -m unittest discover -s tests -p 'test_*.py' -v`  
-Expected: PASS with no network access and only temporary synthetic workspaces.
-
-- [ ] **Step 3: Implement reproducible packaging**
-
-Include only `.codex-plugin/`, `skills/`, `src/`, `scripts/`, `schemas/`, and approved top-level documentation required at runtime/distribution. Exclude `.git/`, tests, caches, local environments, generated workspaces, documents, PDFs, secrets, and `dist/`. Normalize archive timestamps and ordering, then emit SHA-256.
-
-- [ ] **Step 4: Write beta documentation**
-
-Document private installation/share flow, “Set up my job search,” required Linear behavior, optional connector choices, local workspace ownership, immediate packet trigger examples, `Applications/` locations, no auto-apply/send behavior, no telemetry, manual feedback, upgrade safety, and three-to-five-user acceptance steps. Use only generic placeholders such as `JOB-123`, `Example Company`, and `Example Role`.
-
-- [ ] **Step 5: Run all release gates**
-
-Run: `python3 scripts/scan_private_data.py .`  
-Expected: PASS with zero findings.
-
-Run: `python3 scripts/validate_plugin.py .`  
-Expected: PASS with exactly four user-facing skills and no custom app/MCP declaration.
-
-Run: `python3 -m unittest discover -s tests -p 'test_*.py' -v`  
-Expected: PASS.
-
-Run: `python3 scripts/package_plugin.py --version 0.1.0`  
-Expected: creates the archive and checksum deterministically.
-
-Run: `python3 scripts/scan_private_data.py dist/career-pipeline-0.1.0.zip`  
-Expected: PASS after scanning archive members.
-
-Run the current Codex plugin validator supplied by the plugin-creation tooling against the repository root.  
-Expected: PASS.
-
-- [ ] **Step 6: Inspect the package and Git boundary**
-
-Run: `python3 -m zipfile -l dist/career-pipeline-0.1.0.zip`  
-Expected: only the explicit distribution files; no fixtures, generated workspace, application material, environment file, absolute path, or Git metadata.
-
-Run: `git remote -v`  
-Expected: no remote until a private destination is deliberately configured.
-
-Run: `git status --short`  
-Expected: no unexpected tracked or untracked files; the ignored `dist/` artifact does not appear.
-
-- [ ] **Step 7: Verify Milestone 4 and commit the beta candidate**
+### Step 3: Verify and commit
 
 ```bash
-git add README.md PRIVACY.md SECURITY.md CHANGELOG.md docs pyproject.toml src scripts schemas skills tests
-git commit -m "release: prepare career pipeline private beta 0.1.0"
+python3 -m unittest tests.unit.test_migrations tests.integration.test_plugin_update -v
+python3 scripts/scan_private_data.py .
+git add src/career_pipeline/migrations.py scripts/migrate_workspace.py docs/private-beta-upgrades.md tests/unit/test_migrations.py tests/integration/test_plugin_update.py
+git commit -m "feat: migrate prototype workspaces safely"
+```
+
+## Task 11: Run the synthetic beta gate and package privately
+
+**Files:**
+
+- Create: `tests/e2e/test_private_beta.py`
+- Modify: `tests/fixtures/synthetic/**`
+- Create: `scripts/package_plugin.py`
+- Create: `docs/private-beta-installation.md`
+- Create: `CHANGELOG.md`
+- Modify: `.gitignore`
+
+### Step 1: Write the end-to-end acceptance test
+
+Run one fictional user through:
+
+- fresh and resumed onboarding with every connector declined;
+- activation using public ATS lanes;
+- cross-source deduplication and local ID allocation;
+- canonical backlog review and not-pursuing status;
+- immediate single- and multi-role packets;
+- interrupted packet resumption;
+- clear and ambiguous lifecycle evidence;
+- optional Linear export success and failure; and
+- a backed-up update.
+
+Assert final PDFs are directly under synthetic `Applications/` version folders, indexes can be deleted and rebuilt, no scheduler receives packet work, and no connector controls local validity.
+
+Run:
+
+```bash
+python3 -m unittest tests.e2e.test_private_beta -v
+```
+
+Expected: FAIL until the full local-first composition is complete.
+
+### Step 2: Implement deterministic packaging and beta docs
+
+Package only runtime plugin files and approved documentation. Exclude `.git/`, tests, caches, local environments, generated workspaces, application documents, credentials, and `dist/`. Normalize archive order and timestamps and emit SHA-256. Document private installation, local data ownership, connector choices, immediate packet requests, Applications folder locations, no auto-apply behavior, no telemetry, and safe upgrades.
+
+### Step 3: Run the complete release gate
+
+```bash
+python3 -m unittest discover -s tests -v
+python3 scripts/validate_plugin.py .
+python3 scripts/scan_private_data.py .
+python3 scripts/package_plugin.py --output dist
+python3 scripts/validate_plugin.py dist/career-pipeline-plugin.zip
+python3 scripts/scan_private_data.py dist/career-pipeline-plugin.zip
+git status --short
+```
+
+Inspect the archive member list and confirm it contains no generated user workspace or test material.
+
+### Step 4: Commit the beta candidate
+
+```bash
+git add .gitignore CHANGELOG.md docs/private-beta-installation.md scripts/package_plugin.py tests/e2e/test_private_beta.py tests/fixtures/synthetic
+git commit -m "chore: prepare local-first private beta"
 ```
 
 ## Final acceptance checklist
 
-- [ ] A nontechnical Codex Desktop user can install the archive and complete onboarding conversationally.
-- [ ] Linear is required and verified; each optional connector can be declined independently with an accurate fallback.
-- [ ] Profile and search-criteria approval gates activation.
-- [ ] Discovery is schedulable; packet creation is absent from every automation path.
-- [ ] Strong Match and Worth Considering roles are deduplicated, delivered, and read back in Linear; clear non-matches stay local.
-- [ ] Explicit one- and multi-ticket packet requests begin immediately.
-- [ ] Verified final PDFs are attached in Linear and directly browseable under the local `Applications/` folder.
-- [ ] Interrupted workflows resume without duplicate issues, versions, attachments, comments, or alerts.
-- [ ] Lifecycle updates occur only from exact, unambiguous evidence or explicit user direction.
-- [ ] Updates back up state and preserve the source résumé, application history, and Linear history.
-- [ ] Repository and archive privacy scans find no personal data, résumé/application content, credential, telemetry code, private URL, or developer-specific path.
-- [ ] The plugin has no developer-operated service and produces no automatic feedback or logs.
+- [ ] The plugin repository and package contain no personal data, credentials, telemetry, generated application materials, or hardcoded developer paths.
+- [ ] Every test and example uses synthetic identities and content.
+- [ ] The local folder workspace is the sole system of record.
+- [ ] Every qualifying job has one stable canonical `JOB-000123` folder and append-only event history.
+- [ ] IDs are never reused, including after interrupted allocation.
+- [ ] Missing, corrupt, or stale indexes regenerate without changing canonical job bytes.
+- [ ] Every connector can be declined; activation works with a usable public source.
+- [ ] Linear appears only as an explicit optional export destination.
+- [ ] Discovery creates and reads back local records; clear non-matches remain run evidence.
+- [ ] Backlog review reads canonical local state and records local decisions.
+- [ ] Explicit application-packet requests begin immediately and are never scheduled.
+- [ ] Verified final PDFs are directly browseable under the local `Applications/` folder.
+- [ ] Local packet readiness does not depend on an upload or connector.
+- [ ] Lifecycle reconciliation writes only unambiguous derived status and minimal receipts locally.
+- [ ] Export failures cannot roll back, invalidate, or block canonical local state.
+- [ ] Upgrades back up mutable state and preserve resumes, canonical jobs, events, and every application version.
+- [ ] The complete test suite, plugin validator, repository privacy scan, archive validator, and archive privacy scan pass from a clean checkout.
