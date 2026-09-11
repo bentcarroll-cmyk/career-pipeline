@@ -14,6 +14,7 @@ from typing import Iterator, Mapping
 
 from .atomic import atomic_write_json, atomic_write_text, load_json
 from .contracts import WorkspacePaths
+from .dedupe import candidate_key, fallback_identity, requisition_identity
 from .evaluation import JobAssessment
 from .schema import validate_document
 from .sources.base import CandidateJob
@@ -25,6 +26,12 @@ class JobStoreError(ValueError):
 
 class WorkspaceLockedError(JobStoreError):
     pass
+
+
+class DuplicateJobError(JobStoreError):
+    def __init__(self, job_ids: tuple[str, ...]):
+        super().__init__("candidate already exists in the canonical job store")
+        self.job_ids = job_ids
 
 
 _JOB_ID = re.compile(r"JOB-[0-9]{6}")
@@ -211,6 +218,9 @@ def create_job(
         raise JobStoreError("occurred_at is required")
     temp_dir: Path | None = None
     with workspace_lock(workspace):
+        duplicates = _duplicate_job_ids_locked(workspace, candidate)
+        if duplicates:
+            raise DuplicateJobError(duplicates)
         job_id = _allocate_job_id_locked(workspace)
         final_dir = workspace.jobs / job_id
         if final_dir.exists():
@@ -247,6 +257,35 @@ def create_job(
         finally:
             if temp_dir is not None and temp_dir.exists():
                 shutil.rmtree(temp_dir)
+
+
+def _duplicate_job_ids_locked(
+    workspace: WorkspacePaths,
+    candidate: CandidateJob,
+) -> tuple[str, ...]:
+    wanted = candidate_key(candidate)
+    duplicates: list[str] = []
+    for job_dir in sorted(workspace.jobs.iterdir(), key=lambda path: path.name):
+        if not job_dir.is_dir() or _JOB_ID.fullmatch(job_dir.name) is None:
+            continue
+        record = read_job(workspace, job_dir.name)
+        if candidate.requisition_id:
+            existing = requisition_identity(
+                str(record["employer"]),
+                str(record["requisition_id"])
+                if record.get("requisition_id")
+                else None,
+            )
+        else:
+            existing = fallback_identity(
+                str(record["employer"]),
+                str(record["title"]),
+                str(record["location"]) if record.get("location") else None,
+                str(record["team"]) if record.get("team") else None,
+            )
+        if existing == wanted:
+            duplicates.append(job_dir.name)
+    return tuple(duplicates)
 
 
 def _canonical_job_dir(workspace: WorkspacePaths, job_id: str) -> Path:

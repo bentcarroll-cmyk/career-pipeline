@@ -3,14 +3,15 @@
   "$id": "career-pipeline/discovery-state.schema.json",
   "title": "Career Pipeline discovery state",
   "type": "object",
-  "required": ["schema_version", "sources", "stable_review_batch", "deliveries"],
+  "required": ["schema_version", "sources", "stable_review_batch", "canonical_jobs"],
   "properties": {
     "schema_version": {"const": 1},
     "sources": {"type": "object"},
     "stable_review_batch": {"type": ["string", "null"]},
-    "deliveries": {
+    "canonical_jobs": {
       "type": "object",
-      "additionalProperties": {"type": "string"}
+      "additionalProperties": {"type": "string", "pattern": "^JOB-[0-9]{6}$"}
     }
-  }
+  },
+  "additionalProperties": false
 }

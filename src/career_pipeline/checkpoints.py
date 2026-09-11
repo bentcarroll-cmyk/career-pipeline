@@ -26,7 +26,7 @@ class SourceResult:
 class DiscoveryState:
     sources: Mapping[str, SourceCheckpoint] = field(default_factory=dict)
     stable_review_batch: str | None = None
-    deliveries: Mapping[str, str] = field(default_factory=dict)
+    canonical_jobs: Mapping[str, str] = field(default_factory=dict)
 
 
 def stable_review_batch(keys: tuple[str, ...]) -> str | None:

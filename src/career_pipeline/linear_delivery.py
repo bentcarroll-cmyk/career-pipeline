@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Mapping
 
-from .checkpoints import DiscoveryState
 from .dedupe import candidate_key
 from .evaluation import JobAssessment
 from .sources.base import CandidateJob
@@ -144,17 +143,3 @@ def verify_issue_readback(
         verified=True,
         body_hash=expected.body_hash,
     )
-
-
-def record_delivery(
-    state: DiscoveryState,
-    receipt: DeliveryReceipt,
-) -> DiscoveryState:
-    if not receipt.verified:
-        raise DeliveryVerificationError("delivery receipt is not verified")
-    deliveries = dict(state.deliveries)
-    existing = deliveries.get(receipt.candidate_key)
-    if existing and existing != receipt.issue_id:
-        raise DeliveryVerificationError("candidate already has another Linear issue")
-    deliveries[receipt.candidate_key] = receipt.issue_id
-    return replace(state, deliveries=deliveries)

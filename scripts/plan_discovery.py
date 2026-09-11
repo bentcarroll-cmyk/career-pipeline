@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Partition normalized snapshots against an existing duplicate baseline."""
+"""Persist reviewed synthetic-safe discovery input to the local job store."""
 
 from __future__ import annotations
 
@@ -11,38 +11,66 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from career_pipeline.checkpoints import stable_review_batch
-from career_pipeline.dedupe import candidate_key, partition_candidates
+from career_pipeline.checkpoints import DiscoveryState
+from career_pipeline.discovery import ReviewedJob, deliver_reviewed_jobs
+from career_pipeline.evaluation import EvidenceClaim, JobAssessment
 from career_pipeline.sources.base import CandidateJob
+from career_pipeline.workspace import create_workspace
 
 
-def _load(path: Path) -> list[CandidateJob]:
+def _reviewed(path: Path) -> tuple[ReviewedJob, ...]:
     raw = json.loads(path.read_text(encoding="utf-8"))
-    return [
-        CandidateJob(
+    results: list[ReviewedJob] = []
+    for item in raw.get("reviewed", ()):
+        candidate_raw = item["candidate"]
+        assessment_raw = item["assessment"]
+        candidate = CandidateJob(
             **{
-                **item,
-                "responsibilities": tuple(item.get("responsibilities", ())),
-                "uncertainties": tuple(item.get("uncertainties", ())),
+                **candidate_raw,
+                "responsibilities": tuple(candidate_raw.get("responsibilities", ())),
+                "uncertainties": tuple(candidate_raw.get("uncertainties", ())),
             }
         )
-        for item in raw.get("jobs", [])
-    ]
+        assessment = JobAssessment(
+            disposition=assessment_raw["disposition"],
+            role_to_profile_fit=assessment_raw["role_to_profile_fit"],
+            strengths=tuple(
+                EvidenceClaim(**claim) for claim in assessment_raw.get("strengths", ())
+            ),
+            gaps=tuple(assessment_raw.get("gaps", ())),
+            uncertainties=tuple(assessment_raw.get("uncertainties", ())),
+        )
+        results.append(
+            ReviewedJob(
+                candidate,
+                assessment,
+                item["posting_markdown"],
+                item["assessment_markdown"],
+            )
+        )
+    return tuple(results)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--candidates", required=True, type=Path)
-    parser.add_argument("--existing", required=True, type=Path)
+    parser.add_argument("--workspace", required=True, type=Path)
+    parser.add_argument("--reviewed", required=True, type=Path)
+    parser.add_argument("--occurred-at", required=True)
     args = parser.parse_args()
-    partition = partition_candidates(_load(args.candidates), _load(args.existing))
-    keys = tuple(candidate_key(job) for job in partition.novel)
+    outcome = deliver_reviewed_jobs(
+        create_workspace(args.workspace),
+        DiscoveryState(),
+        _reviewed(args.reviewed),
+        occurred_at=args.occurred_at,
+    )
     print(
         json.dumps(
             {
-                "novel_keys": keys,
-                "duplicate_count": len(partition.duplicates),
-                "stable_review_batch": stable_review_batch(keys),
+                "created_job_ids": outcome.created_job_ids,
+                "duplicate_keys": outcome.duplicate_keys,
+                "non_match_keys": outcome.non_match_keys,
+                "stable_review_batch": outcome.state.stable_review_batch,
+                "run_evidence": outcome.run_evidence.relative_to(args.workspace).as_posix(),
             },
             sort_keys=True,
         )
