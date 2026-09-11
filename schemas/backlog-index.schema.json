@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "career-pipeline/backlog-index.schema.json",
+  "title": "Career Pipeline backlog index",
+  "type": "object",
+  "required": ["schema_version", "source_hash", "jobs"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "source_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "jobs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["job_id", "employer", "title", "disposition", "status", "record_hash"]
+      }
+    }
+  },
+  "additionalProperties": false
+}

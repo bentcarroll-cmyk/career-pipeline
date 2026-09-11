@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "career-pipeline/deduplication-index.schema.json",
+  "title": "Career Pipeline deduplication index",
+  "type": "object",
+  "required": ["schema_version", "source_hash", "record_hashes", "identities"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "source_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "record_hashes": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+    },
+    "identities": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {"type": "string", "pattern": "^JOB-[0-9]{6}$"},
+        "uniqueItems": true
+      }
+    }
+  },
+  "additionalProperties": false
+}
