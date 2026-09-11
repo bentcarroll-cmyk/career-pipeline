@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Classify lifecycle evidence and write only a minimal receipt."""
+"""Reconcile lifecycle evidence into canonical local status and a minimal receipt."""
 
 from __future__ import annotations
 
@@ -12,37 +12,39 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from career_pipeline.atomic import atomic_write_json
 from career_pipeline.reconciliation import (
-    LifecycleCandidate,
     LifecycleEvidence,
-    classify_lifecycle_evidence,
-    minimal_receipt,
+    reconcile_lifecycle_evidence,
 )
+from career_pipeline.workspace import create_workspace
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--workspace", required=True, type=Path)
     parser.add_argument("--evidence", required=True, type=Path)
-    parser.add_argument("--candidates", required=True, type=Path)
-    parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--seen", type=Path)
+    parser.add_argument(
+        "--enabled-source",
+        required=True,
+        action="append",
+        choices=("gmail", "google-calendar"),
+    )
     args = parser.parse_args()
     evidence = LifecycleEvidence(
         **json.loads(args.evidence.read_text(encoding="utf-8"))
     )
-    candidates = tuple(
-        LifecycleCandidate(**item)
-        for item in json.loads(args.candidates.read_text(encoding="utf-8"))
+    result = reconcile_lifecycle_evidence(
+        create_workspace(args.workspace),
+        evidence,
+        enabled_sources=tuple(args.enabled_source),
     )
-    seen = (
-        tuple(json.loads(args.seen.read_text(encoding="utf-8")))
-        if args.seen
-        else ()
+    output = asdict(result.decision)
+    output["receipt_path"] = (
+        result.receipt_path.relative_to(args.workspace.resolve()).as_posix()
+        if result.receipt_path is not None
+        else None
     )
-    decision = classify_lifecycle_evidence(evidence, candidates, seen)
-    atomic_write_json(args.output, minimal_receipt(evidence, decision))
-    print(json.dumps(asdict(decision), sort_keys=True))
+    print(json.dumps(output, sort_keys=True))
     return 0
 
 

@@ -9,16 +9,26 @@
     "observed_at",
     "event_class",
     "action",
+    "job_id",
+    "target_status",
     "reason"
   ],
   "properties": {
-    "source_kind": {"enum": ["gmail", "calendar"]},
+    "source_kind": {"enum": ["gmail", "google-calendar"]},
     "source_receipt_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "observed_at": {"type": "string", "minLength": 1},
     "event_class": {"type": "string", "minLength": 1},
     "action": {"enum": ["apply_update", "needs_review", "ignore"]},
-    "ticket_id": {"type": ["string", "null"]},
-    "target_status": {"type": ["string", "null"]},
+    "job_id": {
+      "oneOf": [
+        {"type": "string", "pattern": "^JOB-[0-9]{6}$"},
+        {"type": "null"}
+      ]
+    },
+    "target_status": {
+      "type": ["string", "null"],
+      "enum": ["applied", "closed", "interviewing", "offer", null]
+    },
     "reason": {"type": "string", "minLength": 1}
   },
   "additionalProperties": false
