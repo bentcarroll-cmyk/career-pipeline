@@ -6,12 +6,15 @@
   "required": [
     "schema_version",
     "job_id",
+    "source_record_id",
     "employer",
     "title",
     "posting_url",
     "application_url",
     "source",
     "verified_at",
+    "verification_status",
+    "raw_field_hash",
     "disposition",
     "status",
     "role_to_profile_fit",
@@ -27,6 +30,7 @@
   "properties": {
     "schema_version": {"const": 1},
     "job_id": {"type": "string", "pattern": "^JOB-[0-9]{6}$"},
+    "source_record_id": {"type": "string", "minLength": 1},
     "employer": {"type": "string", "minLength": 1},
     "title": {"type": "string", "minLength": 1},
     "location": {"type": ["string", "null"]},
@@ -36,8 +40,13 @@
     "posting_url": {"type": "string", "minLength": 1},
     "application_url": {"type": "string", "minLength": 1},
     "requisition_id": {"type": ["string", "null"]},
+    "team": {"type": ["string", "null"]},
+    "posted_at": {"type": ["string", "null"]},
+    "updated_at": {"type": ["string", "null"]},
     "source": {"type": "string", "minLength": 1},
     "verified_at": {"type": "string", "minLength": 1},
+    "verification_status": {"type": "string", "minLength": 1},
+    "raw_field_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "disposition": {"enum": ["strong_match", "worth_considering"]},
     "status": {
       "enum": [

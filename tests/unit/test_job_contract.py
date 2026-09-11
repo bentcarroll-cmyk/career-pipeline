@@ -7,6 +7,7 @@ def valid_job() -> dict[str, object]:
     return {
         "schema_version": 1,
         "job_id": "JOB-000123",
+        "source_record_id": "synthetic-record-123",
         "employer": "Example Cooperative",
         "title": "Director of Operations",
         "location": "Example City",
@@ -18,6 +19,8 @@ def valid_job() -> dict[str, object]:
         "requisition_id": "SYN-123",
         "source": "greenhouse",
         "verified_at": "2026-09-11T12:00:00Z",
+        "verification_status": "verified",
+        "raw_field_hash": "a" * 64,
         "disposition": "strong_match",
         "status": "new",
         "role_to_profile_fit": "Synthetic evidence supports the core work.",

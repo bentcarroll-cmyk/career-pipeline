@@ -6,7 +6,7 @@
   "required": ["schema_version", "next_id"],
   "properties": {
     "schema_version": {"const": 1},
-    "next_id": {"type": "integer", "minimum": 1, "maximum": 999999}
+    "next_id": {"type": "integer", "minimum": 1, "maximum": 1000000}
   },
   "additionalProperties": false
 }

@@ -96,16 +96,22 @@ def _validate_job(value: Mapping[str, object]) -> list[ValidationError]:
     for field in (
         "employer",
         "title",
+        "source_record_id",
         "posting_url",
         "application_url",
         "source",
         "verified_at",
+        "verification_status",
+        "raw_field_hash",
         "role_to_profile_fit",
         "recommended_next_action",
         "discovered_at",
     ):
         if not isinstance(value.get(field), str) or not value.get(field):
             errors.append(_error("required_string", field, "must be a non-empty string"))
+    raw_field_hash = value.get("raw_field_hash")
+    if isinstance(raw_field_hash, str) and re.fullmatch(r"[a-f0-9]{64}", raw_field_hash) is None:
+        errors.append(_error("content_hash", "raw_field_hash", "must be a SHA-256 hash"))
     if value.get("disposition") not in _DISPOSITIONS:
         errors.append(
             _error("job_disposition", "disposition", "must be a qualifying disposition")
