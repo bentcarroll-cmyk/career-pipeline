@@ -1,0 +1,6 @@
+interface:
+  display_name: "Prepare Application Packet"
+  short_description: "Create verified materials for selected roles"
+  default_prompt: "Use $prepare-application to prepare a packet for an exact Linear ticket."
+policy:
+  allow_implicit_invocation: true

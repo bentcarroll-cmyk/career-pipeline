@@ -56,6 +56,15 @@ class PluginManifestTests(unittest.TestCase):
                 self.assertTrue((skill_root / "references" / name).is_file())
                 self.assertIn(f"references/{name}", skill_text)
 
+    def test_prepare_skill_has_quality_and_delivery_guidance(self) -> None:
+        skill_root = ROOT / "skills" / "prepare-application"
+        skill_text = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+        expected = {"tailoring.md", "quality-gates.md", "linear-delivery.md"}
+        self.assertTrue((skill_root / "agents" / "openai.yaml").is_file())
+        for name in expected:
+            self.assertTrue((skill_root / "references" / name).is_file())
+            self.assertIn(f"references/{name}", skill_text)
+
 
 if __name__ == "__main__":
     unittest.main()
