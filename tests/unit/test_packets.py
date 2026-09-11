@@ -2,107 +2,181 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from career_pipeline.job_store import create_job, read_job
 from career_pipeline.packets import (
     ApplicationManifest,
     InvalidPacketTransition,
     PacketOptions,
-    PacketTicket,
     advance_packet,
+    complete_local_delivery,
     start_packet,
     verify_local_artifacts,
 )
+from career_pipeline.quality import QualityReceipt
 from career_pipeline.workspace import create_workspace
+from tests.unit.test_job_store import synthetic_assessment, synthetic_candidate
+
+
+def seed_job(workspace) -> str:
+    return str(
+        create_job(
+            workspace,
+            synthetic_candidate(),
+            synthetic_assessment(),
+            posting_markdown="# Synthetic posting\n",
+            assessment_markdown="# Synthetic assessment\n",
+            occurred_at="2026-09-11T20:00:00Z",
+        )["job_id"]
+    )
+
+
+def advance_to_saved(manifest, job_id, artifact_hashes):
+    for stage, receipt in (
+        (
+            "posting_verified",
+            {
+                "posting_url": "https://jobs.example/postings/SYN-601",
+                "application_url": "https://jobs.example/apply/SYN-601",
+            },
+        ),
+        ("drafted", {"draft_hashes": {"resume": "a" * 64}}),
+        ("quality_checked", QualityReceipt.all_passed(2, None).as_dict()),
+        ("saved", {"artifact_hashes": artifact_hashes}),
+    ):
+        manifest = advance_packet(manifest, job_id, stage, receipt)
+    return manifest
 
 
 class PacketTests(unittest.TestCase):
-    def test_final_pdfs_are_directly_browseable_in_v001(self) -> None:
+    def test_final_paths_are_relative_and_directly_browseable_in_v001(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = seed_job(workspace)
             manifest, record = start_packet(
-                PacketTicket(
-                    "JOB-123",
-                    "Example Organization",
-                    "Operations Lead",
-                    "https://jobs.example/postings/JOB-123",
-                    "https://jobs.example/apply/JOB-123",
-                ),
                 workspace,
+                job_id,
                 PacketOptions(),
                 ApplicationManifest(),
+                occurred_at="2026-09-11T20:05:00Z",
+                explicit_request=True,
             )
+
             self.assertEqual(record.version, "v001")
+            self.assertFalse(record.version_dir.is_absolute())
             self.assertEqual(record.resume_pdf.parent, record.version_dir)
             self.assertEqual(record.cover_letter_pdf.parent, record.version_dir)
             self.assertEqual(record.working_dir.parent, record.version_dir)
-            self.assertIn("JOB-123", manifest.packets)
+            self.assertTrue((workspace.root / record.working_dir).is_dir())
+            self.assertIn(job_id, manifest.packets)
+            self.assertEqual(read_job(workspace, job_id)["status"], "prepare_application")
+
+    def test_start_requires_a_current_explicit_request_and_existing_job(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = seed_job(workspace)
+            with self.assertRaises(InvalidPacketTransition):
+                start_packet(
+                    workspace,
+                    job_id,
+                    PacketOptions(),
+                    ApplicationManifest(),
+                    occurred_at="2026-09-11T20:05:00Z",
+                    explicit_request=False,
+                )
+            with self.assertRaises(InvalidPacketTransition):
+                start_packet(
+                    workspace,
+                    "JOB-999999",
+                    PacketOptions(),
+                    ApplicationManifest(),
+                    occurred_at="2026-09-11T20:05:00Z",
+                    explicit_request=True,
+                )
 
     def test_stage_transitions_are_monotonic_and_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = seed_job(workspace)
             manifest, _ = start_packet(
-                PacketTicket("JOB-1", "Example Org", "Role", "posting", "apply"),
                 workspace,
+                job_id,
                 PacketOptions(cover_letter_enabled=False),
                 ApplicationManifest(),
+                occurred_at="2026-09-11T20:05:00Z",
+                explicit_request=True,
             )
             with self.assertRaises(InvalidPacketTransition):
-                advance_packet(manifest, "JOB-1", "drafted", {"draft": "hash"})
-            advanced = advance_packet(
-                manifest,
-                "JOB-1",
-                "posting_verified",
-                {"posting_url": "posting", "application_url": "apply"},
-            )
-            repeated = advance_packet(
-                advanced,
-                "JOB-1",
-                "posting_verified",
-                {"posting_url": "posting", "application_url": "apply"},
-            )
+                advance_packet(manifest, job_id, "drafted", {"draft": "hash"})
+            receipt = {
+                "posting_url": "https://jobs.example/postings/SYN-601",
+                "application_url": "https://jobs.example/apply/SYN-601",
+            }
+            advanced = advance_packet(manifest, job_id, "posting_verified", receipt)
+            repeated = advance_packet(advanced, job_id, "posting_verified", receipt)
             self.assertEqual(advanced, repeated)
 
     def test_quality_stage_rejects_an_incomplete_gate_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = seed_job(workspace)
             manifest, _ = start_packet(
-                PacketTicket("JOB-3", "Example Org", "Role", "posting", "apply"),
                 workspace,
+                job_id,
                 PacketOptions(cover_letter_enabled=False),
                 ApplicationManifest(),
+                occurred_at="2026-09-11T20:05:00Z",
+                explicit_request=True,
             )
             manifest = advance_packet(
                 manifest,
-                "JOB-3",
+                job_id,
                 "posting_verified",
-                {"posting_url": "posting", "application_url": "apply"},
+                {
+                    "posting_url": "https://jobs.example/postings/SYN-601",
+                    "application_url": "https://jobs.example/apply/SYN-601",
+                },
             )
             manifest = advance_packet(
                 manifest,
-                "JOB-3",
+                job_id,
                 "drafted",
                 {"draft_hashes": {"resume": "a" * 64}},
             )
             with self.assertRaises(InvalidPacketTransition):
-                advance_packet(
-                    manifest,
-                    "JOB-3",
-                    "quality_checked",
-                    {"factual": True},
-                )
+                advance_packet(manifest, job_id, "quality_checked", {"factual": True})
 
-    def test_artifact_verification_checks_pdf_hash_and_direct_parent(self) -> None:
+    def test_local_verification_completes_canonical_delivery_without_upload(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = seed_job(workspace)
             manifest, record = start_packet(
-                PacketTicket("JOB-2", "Example Org", "Role", "posting", "apply"),
                 workspace,
+                job_id,
                 PacketOptions(cover_letter_enabled=False),
                 ApplicationManifest(),
+                occurred_at="2026-09-11T20:05:00Z",
+                explicit_request=True,
             )
-            record.resume_pdf.write_bytes(b"%PDF-1.4\nsynthetic\n%%EOF\n")
-            verification = verify_local_artifacts(record)
+            actual_resume = workspace.root / record.resume_pdf
+            actual_resume.write_bytes(b"%PDF-1.4\nsynthetic\n%%EOF\n")
+            verification = verify_local_artifacts(workspace, record)
+            manifest = advance_to_saved(manifest, job_id, verification.hashes)
+            completed = complete_local_delivery(
+                workspace,
+                manifest,
+                job_id,
+                occurred_at="2026-09-11T20:10:00Z",
+            )
+
             self.assertTrue(verification.valid)
-            self.assertIn("resume", verification.hashes)
+            self.assertEqual(completed.packets[job_id][-1].stage, "ready")
+            canonical = read_job(workspace, job_id)
+            self.assertEqual(canonical["status"], "packet_ready")
+            self.assertEqual(canonical["application_versions"][0]["version"], "v001")
+            self.assertEqual(
+                canonical["application_versions"][0]["resume_pdf"],
+                record.resume_pdf.as_posix(),
+            )
 
 
 if __name__ == "__main__":

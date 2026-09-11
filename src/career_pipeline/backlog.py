@@ -7,7 +7,7 @@ from typing import Mapping, Sequence
 
 from .contracts import WorkspacePaths
 from .indexes import load_indexes
-from .job_store import read_job, update_job_status
+from .job_store import JobStoreError, read_job, update_job_status
 
 
 class SelectionError(ValueError):
@@ -29,6 +29,7 @@ def selection_from_request(
     per_role_instructions: Mapping[str, str],
     *,
     explicit_request: bool,
+    workspace: WorkspacePaths,
 ) -> PacketSelection:
     if not explicit_request:
         raise SelectionError("packet preparation requires an explicit current request")
@@ -37,7 +38,12 @@ def selection_from_request(
         raise SelectionError("at least one exact ticket ID is required")
     unknown = set(per_role_instructions).difference(ordered)
     if unknown:
-        raise SelectionError("role instructions reference an unselected ticket")
+        raise SelectionError("role instructions reference an unselected job")
+    try:
+        for job_id in ordered:
+            read_job(workspace, job_id)
+    except JobStoreError as exc:
+        raise SelectionError("every selected job must exist in the canonical store") from exc
     return PacketSelection(ordered, dict(per_role_instructions))
 
 

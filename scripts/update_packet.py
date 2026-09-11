@@ -11,21 +11,52 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from career_pipeline.packets import advance_packet, load_manifest, save_manifest
+from career_pipeline.packets import (
+    advance_packet,
+    complete_local_delivery,
+    load_manifest,
+    save_manifest,
+)
+from career_pipeline.workspace import create_workspace
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--manifest", required=True, type=Path)
-    parser.add_argument("--ticket-id", required=True)
-    parser.add_argument("--stage", required=True)
-    parser.add_argument("--receipt", required=True, type=Path)
+    parser.add_argument("--workspace", required=True, type=Path)
+    parser.add_argument("--job-id", required=True)
+    parser.add_argument(
+        "--stage",
+        required=True,
+        choices=(
+            "posting_verified",
+            "drafted",
+            "quality_checked",
+            "saved",
+            "complete-local",
+        ),
+    )
+    parser.add_argument("--receipt", type=Path)
+    parser.add_argument("--occurred-at")
     args = parser.parse_args()
-    manifest = load_manifest(args.manifest)
-    receipt = json.loads(args.receipt.read_text(encoding="utf-8"))
-    updated = advance_packet(manifest, args.ticket_id, args.stage, receipt)
-    save_manifest(args.manifest, updated)
-    print(f"{args.ticket_id} advanced to {args.stage}")
+    workspace = create_workspace(args.workspace)
+    manifest_path = workspace.state / "application-manifest.json"
+    manifest = load_manifest(manifest_path)
+    if args.stage == "complete-local":
+        if not args.occurred_at:
+            parser.error("--occurred-at is required for complete-local")
+        updated = complete_local_delivery(
+            workspace,
+            manifest,
+            args.job_id,
+            occurred_at=args.occurred_at,
+        )
+    else:
+        if args.receipt is None:
+            parser.error("--receipt is required for this stage")
+        receipt = json.loads(args.receipt.read_text(encoding="utf-8"))
+        updated = advance_packet(manifest, args.job_id, args.stage, receipt)
+    save_manifest(manifest_path, updated)
+    print(f"{args.job_id} advanced to {updated.packets[args.job_id][-1].stage}")
     return 0
 
 

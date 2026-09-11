@@ -6,6 +6,53 @@
   "required": ["schema_version", "packets"],
   "properties": {
     "schema_version": {"const": 1},
-    "packets": {"type": "object"}
-  }
+    "packets": {
+      "type": "object",
+      "patternProperties": {
+        "^JOB-[0-9]{6}$": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "job_id",
+              "employer",
+              "title",
+              "version",
+              "version_dir",
+              "resume_pdf",
+              "working_dir",
+              "stage",
+              "receipts"
+            ],
+            "properties": {
+              "job_id": {"type": "string", "pattern": "^JOB-[0-9]{6}$"},
+              "employer": {"type": "string", "minLength": 1},
+              "title": {"type": "string", "minLength": 1},
+              "version": {"type": "string", "pattern": "^v[0-9]{3}$"},
+              "version_dir": {"type": "string", "pattern": "^Applications/"},
+              "resume_pdf": {"type": "string", "pattern": "^Applications/"},
+              "cover_letter_pdf": {"type": ["string", "null"]},
+              "working_dir": {"type": "string", "pattern": "^Applications/"},
+              "stage": {
+                "enum": [
+                  "selected",
+                  "posting_verified",
+                  "drafted",
+                  "quality_checked",
+                  "saved",
+                  "local_verified",
+                  "ready"
+                ]
+              },
+              "receipts": {"type": "object"},
+              "profile_hash": {"type": ["string", "null"]}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
 }

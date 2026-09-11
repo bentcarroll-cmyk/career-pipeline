@@ -9,7 +9,7 @@ import shutil
 import tempfile
 from contextlib import contextmanager
 from dataclasses import asdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterator, Mapping
 
 from .atomic import atomic_write_json, atomic_write_text, load_json
@@ -352,6 +352,81 @@ def update_job_status(
                 prior_status=prior_status,
                 status=status,
                 metadata=metadata,
+            ),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        atomic_write_json(job_dir / "job.json", updated)
+        atomic_write_text(events_path, prior_events + event_line + "\n")
+        return read_job(workspace, job_id)
+
+
+def record_application_version(
+    workspace: WorkspacePaths,
+    job_id: str,
+    version: Mapping[str, object],
+    *,
+    occurred_at: str,
+) -> dict[str, object]:
+    required = ("version", "resume_pdf", "artifact_hashes")
+    if any(not version.get(field) for field in required):
+        raise JobStoreError("application version receipt is incomplete")
+    if not isinstance(version.get("artifact_hashes"), Mapping):
+        raise JobStoreError("application artifact hashes are invalid")
+    if re.fullmatch(r"v[0-9]{3}", str(version["version"])) is None:
+        raise JobStoreError("application version is invalid")
+    if any(
+        not isinstance(value, str)
+        or re.fullmatch(r"[a-f0-9]{64}", value) is None
+        for value in version["artifact_hashes"].values()
+    ):
+        raise JobStoreError("application artifact hashes are invalid")
+    for field in ("resume_pdf", "cover_letter_pdf"):
+        value = version.get(field)
+        if value is None and field == "cover_letter_pdf":
+            continue
+        if not isinstance(value, str) or not value:
+            raise JobStoreError("application artifact path is invalid")
+        parsed = PurePosixPath(value)
+        if (
+            parsed.is_absolute()
+            or ".." in parsed.parts
+            or len(parsed.parts) < 3
+            or parsed.parts[0] != "Applications"
+            or not parsed.parts[1].startswith(f"{job_id}_")
+        ):
+            raise JobStoreError("application artifact path is outside the job packet")
+    with workspace_lock(workspace):
+        current = read_job(workspace, job_id)
+        versions = list(current.get("application_versions", ()))
+        if not all(isinstance(item, Mapping) for item in versions):
+            raise JobStoreError("canonical application history is invalid")
+        same_number = [
+            item for item in versions if item.get("version") == version["version"]
+        ]
+        if same_number and same_number[0] != dict(version):
+            raise JobStoreError("application version conflicts with canonical history")
+        if not same_number:
+            versions.append(dict(version))
+        if same_number and current["status"] == "packet_ready":
+            return current
+        updated = dict(current)
+        updated["application_versions"] = versions
+        updated["status"] = "packet_ready"
+        errors = validate_document("job", updated)
+        if errors:
+            raise JobStoreError(f"updated job is invalid: {errors[0].code}")
+        job_dir = workspace.jobs / job_id
+        events_path = job_dir / "events.jsonl"
+        prior_events = events_path.read_text(encoding="utf-8")
+        event_line = json.dumps(
+            _event(
+                job_id,
+                "packet_ready",
+                occurred_at,
+                prior_status=str(current["status"]),
+                status="packet_ready",
+                metadata={"version": version["version"]},
             ),
             sort_keys=True,
             separators=(",", ":"),

@@ -1,16 +1,23 @@
-"""Versioned local packet paths, manifests, transitions, and hash checks."""
+"""Immediate, versioned application packets delivered to the local workspace."""
 
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 from dataclasses import dataclass, field, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Mapping
 
 from .atomic import atomic_write_json, load_json
 from .contracts import WorkspacePaths
+from .indexes import load_indexes
+from .job_store import (
+    JobStoreError,
+    read_job,
+    record_application_version,
+    update_job_status,
+    workspace_lock,
+)
 from .quality import QualityReceipt, validate_quality_receipt
 
 
@@ -20,8 +27,7 @@ STAGES = (
     "drafted",
     "quality_checked",
     "saved",
-    "uploaded",
-    "delivery_verified",
+    "local_verified",
     "ready",
 )
 
@@ -37,17 +43,8 @@ class PacketOptions:
 
 
 @dataclass(frozen=True)
-class PacketTicket:
-    ticket_id: str
-    employer: str
-    title: str
-    posting_url: str
-    application_url: str
-
-
-@dataclass(frozen=True)
 class PacketRecord:
-    ticket_id: str
+    job_id: str
     employer: str
     title: str
     version: str
@@ -58,6 +55,10 @@ class PacketRecord:
     stage: str = "selected"
     receipts: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
     profile_hash: str | None = None
+
+    @property
+    def ticket_id(self) -> str:
+        return self.job_id
 
 
 @dataclass(frozen=True)
@@ -77,9 +78,8 @@ _UNSAFE = re.compile(r"[^A-Za-z0-9_-]+")
 _UNDERSCORES = re.compile(r"_+")
 
 
-def _safe_component(value: str, *, allow_hyphen: bool = True) -> str:
-    separator = "_" if allow_hyphen else "-"
-    cleaned = _UNSAFE.sub(separator, value.strip())
+def _safe_component(value: str) -> str:
+    cleaned = _UNSAFE.sub("_", value.strip())
     cleaned = _UNDERSCORES.sub("_", cleaned).strip("_-")
     if not cleaned:
         raise ValueError("packet path component is empty after sanitization")
@@ -89,76 +89,100 @@ def _safe_component(value: str, *, allow_hyphen: bool = True) -> str:
     return f"{cleaned[:63].rstrip('_-')}_{suffix}"
 
 
-def _latest(manifest: ApplicationManifest, ticket_id: str) -> PacketRecord | None:
-    records = manifest.packets.get(ticket_id, ())
+def _latest(manifest: ApplicationManifest, job_id: str) -> PacketRecord | None:
+    records = manifest.packets.get(job_id, ())
     return records[-1] if records else None
 
 
+def _resolve(workspace: WorkspacePaths, relative: Path) -> Path:
+    pure = PurePosixPath(relative.as_posix())
+    if pure.is_absolute() or ".." in pure.parts:
+        raise InvalidPacketTransition("packet path must be workspace-relative")
+    resolved = (workspace.root / Path(*pure.parts)).resolve()
+    try:
+        resolved.relative_to(workspace.root.resolve())
+    except ValueError as exc:
+        raise InvalidPacketTransition("packet path escapes the workspace") from exc
+    return resolved
+
+
 def start_packet(
-    ticket: PacketTicket,
     workspace: WorkspacePaths,
+    job_id: str,
     options: PacketOptions,
     manifest: ApplicationManifest,
+    *,
+    occurred_at: str,
+    explicit_request: bool,
 ) -> tuple[ApplicationManifest, PacketRecord]:
-    current = _latest(manifest, ticket.ticket_id)
+    if not explicit_request:
+        raise InvalidPacketTransition("packet preparation requires an explicit request")
+    try:
+        job = read_job(workspace, job_id)
+    except JobStoreError as exc:
+        raise InvalidPacketTransition("packet job must exist in the canonical store") from exc
+    if not occurred_at:
+        raise InvalidPacketTransition("occurred_at is required")
+    update_job_status(
+        workspace,
+        job_id,
+        "prepare_application",
+        occurred_at=occurred_at,
+    )
+    current = _latest(manifest, job_id)
     if current is not None and current.stage != "ready":
         return manifest, current
 
-    ticket_name = _safe_component(ticket.ticket_id)
-    employer = _safe_component(ticket.employer)
-    title = _safe_component(ticket.title)
-    job_dir = workspace.applications / f"{ticket_name}_{employer}_{title}"
-    job_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = job_dir / ".packet.lock"
-    try:
-        descriptor = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError as exc:
-        raise InvalidPacketTransition("packet version allocation is already running") from exc
-    try:
-        os.close(descriptor)
+    employer = _safe_component(str(job["employer"]))
+    title = _safe_component(str(job["title"]))
+    application_dir = Path("Applications") / f"{job_id}_{employer}_{title}"
+    actual_application_dir = _resolve(workspace, application_dir)
+    with workspace_lock(workspace):
+        actual_application_dir.mkdir(parents=True, exist_ok=True)
         versions = [
-            int(path.name[1:])
-            for path in job_dir.iterdir()
-            if path.is_dir() and re.fullmatch(r"v\d{3}", path.name)
+            int(name[1:])
+            for name in (path.name for path in actual_application_dir.iterdir())
+            if re.fullmatch(r"v[0-9]{3}", name)
         ]
         number = max(versions, default=0) + 1
         version = f"v{number:03d}"
-        version_dir = job_dir / version
-        version_dir.mkdir()
+        version_dir = application_dir / version
+        actual_version_dir = _resolve(workspace, version_dir)
+        actual_version_dir.mkdir()
         working_dir = version_dir / "working"
-        working_dir.mkdir()
-    finally:
-        lock_path.unlink(missing_ok=True)
+        _resolve(workspace, working_dir).mkdir()
 
+    resume_pdf = version_dir / f"Resume_{employer}_{title}.pdf"
+    cover_letter_pdf = (
+        version_dir / f"Cover_Letter_{employer}_{title}.pdf"
+        if options.cover_letter_enabled
+        else None
+    )
     record = PacketRecord(
-        ticket_id=ticket.ticket_id,
-        employer=ticket.employer,
-        title=ticket.title,
+        job_id=job_id,
+        employer=str(job["employer"]),
+        title=str(job["title"]),
         version=version,
         version_dir=version_dir,
-        resume_pdf=version_dir / f"Resume_{employer}_{title}.pdf",
-        cover_letter_pdf=(
-            version_dir / f"Cover_Letter_{employer}_{title}.pdf"
-            if options.cover_letter_enabled
-            else None
-        ),
+        resume_pdf=resume_pdf,
+        cover_letter_pdf=cover_letter_pdf,
         working_dir=working_dir,
         profile_hash=options.profile_hash,
     )
     packets = dict(manifest.packets)
-    packets[ticket.ticket_id] = (*packets.get(ticket.ticket_id, ()), record)
+    packets[job_id] = (*packets.get(job_id, ()), record)
     return replace(manifest, packets=packets), record
 
 
 def advance_packet(
     manifest: ApplicationManifest,
-    ticket_id: str,
+    job_id: str,
     stage: str,
     receipt: Mapping[str, object],
 ) -> ApplicationManifest:
-    current = _latest(manifest, ticket_id)
+    current = _latest(manifest, job_id)
     if current is None:
-        raise InvalidPacketTransition("packet ticket is not in the manifest")
+        raise InvalidPacketTransition("packet job is not in the manifest")
     if stage not in STAGES:
         raise InvalidPacketTransition(f"unknown packet stage: {stage}")
     current_index = STAGES.index(current.stage)
@@ -176,8 +200,8 @@ def advance_packet(
     receipts[stage] = dict(receipt)
     updated_record = replace(current, stage=stage, receipts=receipts)
     packets = dict(manifest.packets)
-    records = packets[ticket_id]
-    packets[ticket_id] = (*records[:-1], updated_record)
+    records = packets[job_id]
+    packets[job_id] = (*records[:-1], updated_record)
     return replace(manifest, packets=packets)
 
 
@@ -214,17 +238,13 @@ def _validate_stage_receipt(
             raise InvalidPacketTransition("saved stage needs artifact hashes")
         if record.cover_letter_pdf is not None and "cover_letter" not in hashes:
             raise InvalidPacketTransition("cover letter hash is required")
-    elif stage == "uploaded":
-        attachments = receipt.get("attachment_ids")
-        if not isinstance(attachments, list) or not attachments:
-            raise InvalidPacketTransition("uploaded stage needs attachment IDs")
-    elif stage == "delivery_verified":
+    elif stage == "local_verified":
         if receipt.get("verified") is not True or not isinstance(
-            receipt.get("attachment_hashes"), Mapping
+            receipt.get("artifact_hashes"), Mapping
         ):
-            raise InvalidPacketTransition("delivery readback is not verified")
+            raise InvalidPacketTransition("local artifact readback is not verified")
     elif stage == "ready" and receipt.get("packet_ready") is not True:
-        raise InvalidPacketTransition("ready stage needs a verified label receipt")
+        raise InvalidPacketTransition("ready stage needs canonical local delivery")
 
 
 def resume_queue(manifest: ApplicationManifest) -> tuple[PacketRecord, ...]:
@@ -247,14 +267,19 @@ def _hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def verify_local_artifacts(record: PacketRecord) -> ArtifactVerification:
+def verify_local_artifacts(
+    workspace: WorkspacePaths,
+    record: PacketRecord,
+) -> ArtifactVerification:
     expected = {"resume": record.resume_pdf}
     if record.cover_letter_pdf is not None:
         expected["cover_letter"] = record.cover_letter_pdf
     errors: list[str] = []
     hashes: dict[str, str] = {}
-    for name, path in expected.items():
-        if path.parent != record.version_dir:
+    actual_version_dir = _resolve(workspace, record.version_dir)
+    for name, relative_path in expected.items():
+        path = _resolve(workspace, relative_path)
+        if path.parent != actual_version_dir:
             errors.append(f"{name}_not_in_version_root")
             continue
         if not path.is_file() or not path.read_bytes().startswith(b"%PDF-"):
@@ -264,7 +289,7 @@ def verify_local_artifacts(record: PacketRecord) -> ArtifactVerification:
     allowed = {path.name for path in expected.values()}
     extras = [
         path.name
-        for path in record.version_dir.glob("*.pdf")
+        for path in actual_version_dir.glob("*.pdf")
         if path.name not in allowed
     ]
     if extras:
@@ -272,22 +297,75 @@ def verify_local_artifacts(record: PacketRecord) -> ArtifactVerification:
     return ArtifactVerification(not errors, tuple(errors), hashes)
 
 
+def complete_local_delivery(
+    workspace: WorkspacePaths,
+    manifest: ApplicationManifest,
+    job_id: str,
+    *,
+    occurred_at: str,
+) -> ApplicationManifest:
+    record = _latest(manifest, job_id)
+    if record is None:
+        raise InvalidPacketTransition("packet job is not in the manifest")
+    if record.stage == "ready":
+        return manifest
+    if record.stage not in {"saved", "local_verified"}:
+        raise InvalidPacketTransition("packet must be saved before local delivery")
+    verification = verify_local_artifacts(workspace, record)
+    if not verification.valid:
+        raise InvalidPacketTransition(
+            "local artifact checks failed: " + ", ".join(verification.errors)
+        )
+    saved_hashes = record.receipts.get("saved", {}).get("artifact_hashes")
+    if dict(saved_hashes or {}) != dict(verification.hashes):
+        raise InvalidPacketTransition("saved artifact hashes do not match local readback")
+    if record.stage == "saved":
+        manifest = advance_packet(
+            manifest,
+            job_id,
+            "local_verified",
+            {"verified": True, "artifact_hashes": dict(verification.hashes)},
+        )
+        record = _latest(manifest, job_id)
+        assert record is not None
+    record_application_version(
+        workspace,
+        job_id,
+        {
+            "version": record.version,
+            "resume_pdf": record.resume_pdf.as_posix(),
+            "cover_letter_pdf": (
+                record.cover_letter_pdf.as_posix()
+                if record.cover_letter_pdf is not None
+                else None
+            ),
+            "artifact_hashes": dict(verification.hashes),
+        },
+        occurred_at=occurred_at,
+    )
+    load_indexes(workspace)
+    return advance_packet(
+        manifest,
+        job_id,
+        "ready",
+        {"packet_ready": True, "canonical_job_id": job_id},
+    )
+
+
 def _record_to_json(record: PacketRecord) -> dict[str, object]:
     return {
-        "ticket_id": record.ticket_id,
+        "job_id": record.job_id,
         "employer": record.employer,
         "title": record.title,
         "version": record.version,
-        "version_dir": str(record.version_dir),
-        "resume_pdf": str(record.resume_pdf),
+        "version_dir": record.version_dir.as_posix(),
+        "resume_pdf": record.resume_pdf.as_posix(),
         "cover_letter_pdf": (
-            str(record.cover_letter_pdf) if record.cover_letter_pdf else None
+            record.cover_letter_pdf.as_posix() if record.cover_letter_pdf else None
         ),
-        "working_dir": str(record.working_dir),
+        "working_dir": record.working_dir.as_posix(),
         "stage": record.stage,
-        "receipts": {
-            name: dict(receipt) for name, receipt in record.receipts.items()
-        },
+        "receipts": {name: dict(receipt) for name, receipt in record.receipts.items()},
         "profile_hash": record.profile_hash,
     }
 
@@ -298,31 +376,40 @@ def save_manifest(path: Path, manifest: ApplicationManifest) -> None:
         {
             "schema_version": manifest.schema_version,
             "packets": {
-                ticket_id: [_record_to_json(record) for record in records]
-                for ticket_id, records in sorted(manifest.packets.items())
+                job_id: [_record_to_json(record) for record in records]
+                for job_id, records in sorted(manifest.packets.items())
             },
         },
     )
 
 
+def _relative_path(value: object) -> Path:
+    if not isinstance(value, str) or not value:
+        raise InvalidPacketTransition("manifest path must be a non-empty string")
+    parsed = PurePosixPath(value)
+    if parsed.is_absolute() or ".." in parsed.parts:
+        raise InvalidPacketTransition("manifest path must be workspace-relative")
+    return Path(*parsed.parts)
+
+
 def load_manifest(path: Path) -> ApplicationManifest:
     raw = load_json(path)
     packets: dict[str, tuple[PacketRecord, ...]] = {}
-    for ticket_id, records in raw.get("packets", {}).items():
-        packets[ticket_id] = tuple(
+    for job_id, records in raw.get("packets", {}).items():
+        packets[job_id] = tuple(
             PacketRecord(
-                ticket_id=item["ticket_id"],
+                job_id=item["job_id"],
                 employer=item["employer"],
                 title=item["title"],
                 version=item["version"],
-                version_dir=Path(item["version_dir"]),
-                resume_pdf=Path(item["resume_pdf"]),
+                version_dir=_relative_path(item["version_dir"]),
+                resume_pdf=_relative_path(item["resume_pdf"]),
                 cover_letter_pdf=(
-                    Path(item["cover_letter_pdf"])
+                    _relative_path(item["cover_letter_pdf"])
                     if item.get("cover_letter_pdf")
                     else None
                 ),
-                working_dir=Path(item["working_dir"]),
+                working_dir=_relative_path(item["working_dir"]),
                 stage=item["stage"],
                 receipts={
                     name: dict(receipt)

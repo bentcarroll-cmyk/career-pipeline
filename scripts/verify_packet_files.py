@@ -12,15 +12,18 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from career_pipeline.packets import load_manifest, verify_local_artifacts
+from career_pipeline.workspace import create_workspace
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--manifest", required=True, type=Path)
-    parser.add_argument("--ticket-id", required=True)
+    parser.add_argument("--workspace", required=True, type=Path)
+    parser.add_argument("--job-id", required=True)
     args = parser.parse_args()
-    record = load_manifest(args.manifest).packets[args.ticket_id][-1]
-    verification = verify_local_artifacts(record)
+    workspace = create_workspace(args.workspace)
+    manifest = load_manifest(workspace.state / "application-manifest.json")
+    record = manifest.packets[args.job_id][-1]
+    verification = verify_local_artifacts(workspace, record)
     print(json.dumps({
         "valid": verification.valid,
         "errors": verification.errors,
