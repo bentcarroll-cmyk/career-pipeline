@@ -1,83 +1,81 @@
+import tempfile
 import unittest
+from pathlib import Path
 
-from career_pipeline.evaluation import EvidenceClaim, JobAssessment
 from career_pipeline.linear_delivery import (
-    DeliveryVerificationError,
-    build_issue_payload,
-    verify_issue_readback,
+    ExportRequestError,
+    ExportVerificationError,
+    build_linear_export_payload,
+    verify_linear_export_readback,
 )
-from career_pipeline.sources.base import SourceSnapshot
-from career_pipeline.sources.generic import normalize
+from career_pipeline.workspace import create_workspace
+from tests.unit.test_packets import seed_job
 
 
-def job():
-    return normalize(
-        SourceSnapshot(
-            "public-search",
-            "2026-09-11T12:00:00Z",
-            [
-                {
-                    "source_record_id": "linear-source-record",
-                    "requisition_id": "SYN-LIN-601",
-                    "employer": "Example Organization",
-                    "title": "Operations Lead",
-                    "responsibilities": ["Build an operating cadence."],
-                    "location": "New York, NY",
-                    "posting_url": "https://jobs.example/postings/SYN-LIN-601",
-                    "application_url": "https://jobs.example/apply/SYN-LIN-601"
-                }
-            ],
-        )
-    )[0]
-
-
-def assessment(disposition: str = "strong_match"):
-    return JobAssessment(
-        disposition=disposition,
-        role_to_profile_fit="Matches approved operating-system work.",
-        strengths=(EvidenceClaim("EV-001", "Built a fictional planning cadence."),),
-        gaps=("Sector experience needs confirmation.",),
-        uncertainties=("Compensation is not stated.",),
-    )
-
-
-class LinearDeliveryTests(unittest.TestCase):
-    def test_builds_complete_qualifying_payload(self) -> None:
-        payload = build_issue_payload(
-            job(),
-            assessment(),
-            {
-                "team_id": "synthetic-team",
-                "project_id": "synthetic-project",
-            },
-        )
-        self.assertEqual(payload.labels, ("Strong Match",))
-        self.assertIn("SYN-LIN-601", payload.description)
-        self.assertIn("Evidence-supported strengths", payload.description)
-        self.assertEqual(payload.application_url, "https://jobs.example/apply/SYN-LIN-601")
-
-    def test_non_match_cannot_be_built_for_linear(self) -> None:
-        with self.assertRaises(ValueError):
-            build_issue_payload(
-                job(),
-                assessment("non_match"),
+class LinearExportTests(unittest.TestCase):
+    def test_builds_export_only_from_existing_canonical_job(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = seed_job(workspace)
+            payload = build_linear_export_payload(
+                workspace,
+                job_id,
                 {"team_id": "synthetic-team", "project_id": "synthetic-project"},
+                explicit_request=True,
             )
 
-    def test_readback_must_match_exact_destination_and_body(self) -> None:
-        payload = build_issue_payload(
-            job(),
-            assessment(),
-            {"team_id": "synthetic-team", "project_id": "synthetic-project"},
-        )
-        actual = payload.to_readback("SYN-777")
-        receipt = verify_issue_readback(payload, actual)
-        self.assertTrue(receipt.verified)
-        self.assertEqual(receipt.issue_id, "SYN-777")
+            self.assertEqual(payload.job_id, job_id)
+            self.assertIn(job_id, payload.title)
+            self.assertIn("Evidence-supported strengths", payload.description)
+            self.assertEqual(
+                payload.application_url,
+                "https://jobs.example/apply/SYN-601",
+            )
 
-        changed = {**actual, "project_id": "wrong-project"}
-        with self.assertRaises(DeliveryVerificationError):
-            verify_issue_readback(payload, changed)
+    def test_export_requires_explicit_request_and_existing_job(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = seed_job(workspace)
+            with self.assertRaises(ExportRequestError):
+                build_linear_export_payload(
+                    workspace,
+                    job_id,
+                    {"team_id": "synthetic-team", "project_id": "synthetic-project"},
+                    explicit_request=False,
+                )
+            with self.assertRaises(ExportRequestError):
+                build_linear_export_payload(
+                    workspace,
+                    "JOB-999999",
+                    {"team_id": "synthetic-team", "project_id": "synthetic-project"},
+                    explicit_request=True,
+                )
+
+    def test_readback_must_match_exact_destination_and_content(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = seed_job(workspace)
+            payload = build_linear_export_payload(
+                workspace,
+                job_id,
+                {"team_id": "synthetic-team", "project_id": "synthetic-project"},
+                explicit_request=True,
+            )
+            actual = payload.to_readback("SYN-777")
+            receipt = verify_linear_export_readback(
+                payload,
+                actual,
+                exported_at="2026-09-11T23:00:00Z",
+            )
+            self.assertTrue(receipt.verified)
+            self.assertEqual(receipt.destination_id, "SYN-777")
+
+            with self.assertRaises(ExportVerificationError):
+                verify_linear_export_readback(
+                    payload,
+                    {**actual, "project_id": "wrong-project"},
+                    exported_at="2026-09-11T23:00:00Z",
+                )
 
 
 if __name__ == "__main__":

@@ -434,3 +434,70 @@ def record_application_version(
         atomic_write_json(job_dir / "job.json", updated)
         atomic_write_text(events_path, prior_events + event_line + "\n")
         return read_job(workspace, job_id)
+
+
+def record_export_receipt(
+    workspace: WorkspacePaths,
+    job_id: str,
+    receipt: Mapping[str, object],
+) -> dict[str, object]:
+    required_strings = (
+        "destination_kind",
+        "destination_id",
+        "exported_at",
+        "content_hash",
+    )
+    if any(not isinstance(receipt.get(field), str) or not receipt.get(field) for field in required_strings):
+        raise JobStoreError("export receipt is incomplete")
+    if receipt.get("verified") is not True:
+        raise JobStoreError("export receipt is not verified")
+    content_hash = str(receipt["content_hash"])
+    if re.fullmatch(r"[a-f0-9]{64}", content_hash) is None:
+        raise JobStoreError("export content hash is invalid")
+    artifact_hashes = receipt.get("artifact_hashes")
+    if not isinstance(artifact_hashes, Mapping) or any(
+        not isinstance(value, str)
+        or re.fullmatch(r"[a-f0-9]{64}", value) is None
+        for value in artifact_hashes.values()
+    ):
+        raise JobStoreError("export artifact hashes are invalid")
+    with workspace_lock(workspace):
+        current = read_job(workspace, job_id)
+        exports = list(current.get("exports", ()))
+        if not all(isinstance(item, Mapping) for item in exports):
+            raise JobStoreError("canonical export history is invalid")
+        same_content = [
+            item
+            for item in exports
+            if item.get("destination_kind") == receipt["destination_kind"]
+            and item.get("content_hash") == content_hash
+        ]
+        if same_content:
+            return current
+        exports.append(dict(receipt))
+        updated = dict(current)
+        updated["exports"] = exports
+        errors = validate_document("job", updated)
+        if errors:
+            raise JobStoreError(f"updated job is invalid: {errors[0].code}")
+        job_dir = workspace.jobs / job_id
+        events_path = job_dir / "events.jsonl"
+        prior_events = events_path.read_text(encoding="utf-8")
+        event_line = json.dumps(
+            _event(
+                job_id,
+                "export_verified",
+                str(receipt["exported_at"]),
+                prior_status=str(current["status"]),
+                status=str(current["status"]),
+                metadata={
+                    "destination_kind": receipt["destination_kind"],
+                    "content_hash": content_hash,
+                },
+            ),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        atomic_write_json(job_dir / "job.json", updated)
+        atomic_write_text(events_path, prior_events + event_line + "\n")
+        return read_job(workspace, job_id)

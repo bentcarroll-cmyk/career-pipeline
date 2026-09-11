@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "career-pipeline/export-receipt.schema.json",
+  "title": "Career Pipeline optional export receipt",
+  "type": "object",
+  "required": [
+    "destination_kind",
+    "destination_id",
+    "job_id",
+    "exported_at",
+    "content_hash",
+    "artifact_hashes",
+    "verified"
+  ],
+  "properties": {
+    "destination_kind": {"type": "string", "minLength": 1},
+    "destination_id": {"type": "string", "minLength": 1},
+    "job_id": {"type": "string", "pattern": "^JOB-[0-9]{6}$"},
+    "exported_at": {"type": "string", "minLength": 1},
+    "content_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "artifact_hashes": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+    },
+    "verified": {"const": true}
+  },
+  "additionalProperties": false
+}
