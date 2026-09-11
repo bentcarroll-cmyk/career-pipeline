@@ -1,0 +1,1 @@
+Use the approved Career Pipeline lifecycle rules and configured local workspace. Read only enabled job-related Gmail or Calendar evidence, update an exact Linear ticket only for an unambiguous status, and retain only a minimal receipt. Stay quiet when evidence is unchanged or non-actionable. Never send, reply, accept an invitation, create an event, or contact another person.

@@ -28,6 +28,21 @@ class PluginManifestTests(unittest.TestCase):
             {"onboard", "discover-jobs", "review-backlog", "prepare-application"},
         )
 
+    def test_onboard_skill_links_every_progressive_reference(self) -> None:
+        skill_root = ROOT / "skills" / "onboard"
+        skill_text = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+        expected = {
+            "privacy-and-consent.md",
+            "connectors.md",
+            "interview.md",
+            "readiness-and-activation.md",
+        }
+        discovered = {path.name for path in (skill_root / "references").glob("*.md")}
+        self.assertTrue(expected.issubset(discovered))
+        for name in expected:
+            self.assertIn(f"references/{name}", skill_text)
+        self.assertTrue((skill_root / "agents" / "openai.yaml").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

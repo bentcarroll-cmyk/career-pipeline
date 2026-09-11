@@ -1,0 +1,87 @@
+{
+  "config": {
+    "workspace_root": "__TEMP_WORKSPACE__",
+    "timezone": "America/New_York",
+    "enabled_sources": ["public_ats"],
+    "linear": {
+      "workspace_id": "synthetic-workspace",
+      "team_id": "synthetic-team",
+      "project_id": "synthetic-project"
+    },
+    "packet_defaults": {
+      "resume_pages": 2,
+      "cover_letter_enabled": true,
+      "cover_letter_pages": 1
+    }
+  },
+  "onboarding": {
+    "stage": "readiness",
+    "completed": [
+      "privacy",
+      "workspace",
+      "linear",
+      "optional_connectors",
+      "resume",
+      "interview",
+      "profile",
+      "packet_defaults",
+      "schedule"
+    ],
+    "connectors": {
+      "linear": {
+        "decision": "connected",
+        "capabilities": [
+          "attach_file",
+          "comment",
+          "create_issue",
+          "manage_labels",
+          "manage_views",
+          "read_issue",
+          "search_issues"
+        ]
+      },
+      "indeed": {
+        "decision": "declined",
+        "capabilities": []
+      },
+      "linkedin": {
+        "decision": "declined",
+        "capabilities": []
+      },
+      "firecrawl": {
+        "decision": "declined",
+        "capabilities": []
+      },
+      "browser": {
+        "decision": "declined",
+        "capabilities": []
+      },
+      "notion": {
+        "decision": "declined",
+        "capabilities": []
+      },
+      "github": {
+        "decision": "declined",
+        "capabilities": []
+      },
+      "gmail": {
+        "decision": "declined",
+        "capabilities": []
+      },
+      "google-calendar": {
+        "decision": "declined",
+        "capabilities": []
+      },
+      "google-drive": {
+        "decision": "declined",
+        "capabilities": []
+      },
+      "usajobs": {
+        "decision": "declined",
+        "capabilities": []
+      }
+    },
+    "profile_hash": "synthetic-profile-hash",
+    "criteria_hash": "synthetic-criteria-hash"
+  }
+}

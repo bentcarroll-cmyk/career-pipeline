@@ -1,0 +1,1 @@
+Use $discover-jobs with the approved Career Pipeline configuration in the selected local workspace. Verify enabled sources and the configured Linear destination, preserve each source's checkpoint independently, and report only new matches, meaningful changes, or actionable failures. Stay quiet when nothing actionable changes.

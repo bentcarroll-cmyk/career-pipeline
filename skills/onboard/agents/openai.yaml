@@ -1,0 +1,6 @@
+interface:
+  display_name: "Onboard Career Pipeline"
+  short_description: "Set up a private local-first job search"
+  default_prompt: "Use $onboard to set up my job search."
+policy:
+  allow_implicit_invocation: true

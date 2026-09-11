@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Mapping
 
+from .onboarding import OnboardingState
+
 
 class UnsupportedAutomation(ValueError):
     pass
@@ -41,3 +43,22 @@ def automation_allowed(kind: str, ready: bool) -> bool:
     if kind not in {"discovery", "lifecycle"}:
         raise UnsupportedAutomation(f"unsupported automation kind: {kind}")
     return ready
+
+
+def default_discovery_schedule(timezone: str) -> dict[str, object]:
+    if not timezone:
+        raise ValueError("timezone is required")
+    return {
+        "frequency": "weekday",
+        "weekdays": ["MO", "TU", "WE", "TH", "FR"],
+        "runs_per_day": 2,
+        "timezone": timezone,
+    }
+
+
+def lifecycle_available(state: OnboardingState) -> bool:
+    return any(
+        state.connectors.get(name) is not None
+        and state.connectors[name].decision == "connected"
+        for name in ("gmail", "google-calendar")
+    )
