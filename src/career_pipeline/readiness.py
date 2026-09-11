@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .capabilities import LINEAR_REQUIRED_ACTIONS, OPTIONAL_CONNECTORS
+from .atomic import atomic_write_json, load_json
+from .capabilities import CONNECTORS, PUBLIC_DISCOVERY_SOURCES
+from .contracts import WorkspacePaths
+from .indexes import load_indexes
+from .job_store import workspace_lock
 from .onboarding import OnboardingState
 
 
@@ -32,7 +36,15 @@ def check_readiness(
         failures.append("workspace_unavailable")
     else:
         root = Path(root_value)
-        for relative in ("Profile", "Sources", "Applications", "Runs", "State"):
+        for relative in (
+            "Profile",
+            "Sources",
+            "Jobs",
+            "Applications",
+            "Indexes",
+            "Runs",
+            "State",
+        ):
             if not (root / relative).is_dir():
                 failures.append("workspace_incomplete")
                 break
@@ -52,6 +64,37 @@ def check_readiness(
                 or onboarding.criteria_hash != criteria_hash
             ):
                 failures.append("approved_files_changed")
+        workspace = WorkspacePaths(
+            root=root.resolve(),
+            profile=(root / "Profile").resolve(),
+            sources=(root / "Sources").resolve(),
+            jobs=(root / "Jobs").resolve(),
+            applications=(root / "Applications").resolve(),
+            indexes=(root / "Indexes").resolve(),
+            runs=(root / "Runs").resolve(),
+            state=(root / "State").resolve(),
+        )
+        probe = workspace.state / ".readiness-probe.json"
+        try:
+            counter = load_json(workspace.state / "next-job-id.json")
+            next_id = counter.get("next_id")
+            if (
+                counter.get("schema_version") != 1
+                or not isinstance(next_id, int)
+                or isinstance(next_id, bool)
+                or not 1 <= next_id <= 1000000
+            ):
+                raise ValueError("invalid next job ID state")
+            with workspace_lock(workspace):
+                atomic_write_json(probe, {"schema_version": 1, "ready": True})
+                if load_json(probe).get("ready") is not True:
+                    raise ValueError("readiness probe mismatch")
+                probe.unlink()
+            load_indexes(workspace)
+        except (OSError, ValueError):
+            failures.append("local_store_invalid")
+        finally:
+            probe.unlink(missing_ok=True)
 
     timezone = config.get("timezone")
     try:
@@ -61,29 +104,23 @@ def check_readiness(
     except ZoneInfoNotFoundError:
         failures.append("timezone_invalid")
 
-    linear = onboarding.connectors.get("linear")
-    if (
-        linear is None
-        or linear.decision != "connected"
-        or not LINEAR_REQUIRED_ACTIONS.issubset(linear.capabilities)
-    ):
-        failures.append("linear_required")
-    linear_destination = config.get("linear")
-    if (
-        not isinstance(linear_destination, Mapping)
-        or any(
-            not isinstance(linear_destination.get(field), str)
-            or not linear_destination.get(field)
-            for field in ("workspace_id", "team_id", "project_id")
-        )
-    ):
-        failures.append("linear_destination_missing")
     if not onboarding.profile_hash or not onboarding.criteria_hash:
         failures.append("profile_not_approved")
-    if any(name not in onboarding.connectors for name in OPTIONAL_CONNECTORS):
+    if any(name not in onboarding.connectors for name in CONNECTORS):
         failures.append("connector_decisions_incomplete")
     sources = config.get("enabled_sources")
-    if not isinstance(sources, list) or not sources:
+    if not isinstance(sources, list) or not any(
+        isinstance(source, str)
+        and (
+            source in PUBLIC_DISCOVERY_SOURCES
+            or (
+                source in onboarding.connectors
+                and onboarding.connectors[source].decision == "connected"
+                and bool(onboarding.connectors[source].capabilities)
+            )
+        )
+        for source in sources
+    ):
         failures.append("no_discovery_source")
     packet_defaults = config.get("packet_defaults")
     if (

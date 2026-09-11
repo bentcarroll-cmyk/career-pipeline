@@ -3,11 +3,6 @@
     "workspace_root": "__TEMP_WORKSPACE__",
     "timezone": "America/New_York",
     "enabled_sources": ["public_ats"],
-    "linear": {
-      "workspace_id": "synthetic-workspace",
-      "team_id": "synthetic-team",
-      "project_id": "synthetic-project"
-    },
     "packet_defaults": {
       "resume_pages": 2,
       "cover_letter_enabled": true,
@@ -19,8 +14,7 @@
     "completed": [
       "privacy",
       "workspace",
-      "linear",
-      "optional_connectors",
+      "connectors",
       "resume",
       "interview",
       "profile",
@@ -29,16 +23,8 @@
     ],
     "connectors": {
       "linear": {
-        "decision": "connected",
-        "capabilities": [
-          "attach_file",
-          "comment",
-          "create_issue",
-          "manage_labels",
-          "manage_views",
-          "read_issue",
-          "search_issues"
-        ]
+        "decision": "declined",
+        "capabilities": []
       },
       "indeed": {
         "decision": "declined",

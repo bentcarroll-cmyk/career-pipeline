@@ -6,8 +6,25 @@
   "required": ["schema_version", "stage", "completed", "connectors"],
   "properties": {
     "schema_version": {"const": 1},
-    "stage": {"type": "string"},
+    "stage": {
+      "enum": [
+        "privacy",
+        "workspace",
+        "connectors",
+        "resume",
+        "interview",
+        "profile",
+        "packet_defaults",
+        "schedule",
+        "readiness",
+        "active"
+      ]
+    },
     "completed": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
-    "connectors": {"type": "object"}
-  }
+    "connectors": {"type": "object"},
+    "receipts": {"type": "object"},
+    "profile_hash": {"type": ["string", "null"]},
+    "criteria_hash": {"type": ["string", "null"]}
+  },
+  "additionalProperties": false
 }

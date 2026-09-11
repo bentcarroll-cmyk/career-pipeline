@@ -7,13 +7,13 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from .atomic import atomic_write_json, load_json
+from .capabilities import CONNECTORS
 
 
 STAGES = (
     "privacy",
     "workspace",
-    "linear",
-    "optional_connectors",
+    "connectors",
     "resume",
     "interview",
     "profile",
@@ -22,21 +22,6 @@ STAGES = (
     "readiness",
     "active",
 )
-CONNECTORS = (
-    "linear",
-    "indeed",
-    "linkedin",
-    "firecrawl",
-    "browser",
-    "notion",
-    "github",
-    "gmail",
-    "google-calendar",
-    "google-drive",
-    "usajobs",
-)
-
-
 class InvalidTransition(ValueError):
     pass
 
@@ -102,10 +87,8 @@ def advance_onboarding(
     current_index = STAGES.index(state.stage)
     requested_index = STAGES.index(completed_stage)
     if completed_stage == "active":
-        linear = state.connectors.get("linear")
         if (
-            linear is None
-            or linear.decision != "connected"
+            set(CONNECTORS).difference(state.connectors)
             or not state.profile_hash
             or not state.criteria_hash
             or not receipt.get("ready")

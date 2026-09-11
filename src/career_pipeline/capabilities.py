@@ -1,18 +1,14 @@
-"""Semantic capability requirements for connector truthfulness."""
+"""Semantic connector capabilities without making any connector authoritative."""
 
-LINEAR_REQUIRED_ACTIONS = frozenset(
+LINEAR_EXPORT_ACTIONS = frozenset(
     {
-        "search_issues",
         "create_issue",
         "read_issue",
-        "manage_labels",
-        "manage_views",
-        "comment",
-        "attach_file",
     }
 )
 
-OPTIONAL_CONNECTORS = (
+CONNECTORS = (
+    "linear",
     "indeed",
     "linkedin",
     "firecrawl",
@@ -23,4 +19,8 @@ OPTIONAL_CONNECTORS = (
     "google-calendar",
     "google-drive",
     "usajobs",
+)
+
+PUBLIC_DISCOVERY_SOURCES = frozenset(
+    {"public_ats", "public-search", "greenhouse", "lever", "ashby"}
 )

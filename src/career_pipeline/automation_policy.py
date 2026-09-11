@@ -23,16 +23,17 @@ def render_automation(kind: str, config: Mapping[str, object]) -> str:
     if kind == "discovery":
         return (
             f"Use $discover-jobs with the approved configuration at {config_path}. "
-            "Verify enabled sources and the configured Linear destination, preserve "
-            "independent source checkpoints, and report only new matches, meaningful "
-            "changes, or actionable failures. Stay quiet when nothing actionable changes. "
+            "Verify enabled sources and canonical local job folders, repair derived "
+            "indexes when needed, preserve independent source checkpoints, and report "
+            "only new matches, meaningful changes, or actionable failures. Stay quiet "
+            "when nothing actionable changes. "
             f"Interpret the cadence in timezone {timezone}."
         )
     if kind == "lifecycle":
         return (
             f"Use the approved lifecycle rules referenced by {config_path}. Read only "
-            "enabled job-related Gmail or Calendar evidence, update the exact Linear "
-            "ticket only for an unambiguous status, and retain only a minimal receipt. "
+            "enabled job-related Gmail or Calendar evidence, update canonical local job "
+            "status only for unambiguous evidence, and retain only a minimal receipt. "
             "Stay quiet when evidence is unchanged or non-actionable. Never send, reply, "
             f"accept, or create an event. Interpret the cadence in timezone {timezone}."
         )

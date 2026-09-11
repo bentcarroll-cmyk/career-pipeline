@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from career_pipeline.capabilities import LINEAR_REQUIRED_ACTIONS, OPTIONAL_CONNECTORS
 from career_pipeline.onboarding import (
+    CONNECTORS,
     OnboardingState,
     advance_onboarding,
     load_onboarding_state,
@@ -17,21 +17,14 @@ class OnboardingScenarioTests(unittest.TestCase):
     def test_interrupted_state_resumes_with_receipts_and_declines(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             path = Path(raw) / "onboarding-state.json"
-            state = OnboardingState.at("linear")
-            state = record_connector_decision(
-                state,
-                "linear",
-                "connected",
-                LINEAR_REQUIRED_ACTIONS,
-                LINEAR_REQUIRED_ACTIONS,
-            )
+            state = OnboardingState.at("connectors")
+            for connector in CONNECTORS:
+                state = record_connector_decision(state, connector, "declined", ())
             state = advance_onboarding(
                 state,
-                "optional_connectors",
-                {"project_id": "synthetic-project", "verified": True},
+                "resume",
+                {"all_connector_decisions_recorded": True},
             )
-            for connector in OPTIONAL_CONNECTORS:
-                state = record_connector_decision(state, connector, "declined", ())
             save_onboarding_state(path, state)
 
             resumed = load_onboarding_state(path)
@@ -39,9 +32,11 @@ class OnboardingScenarioTests(unittest.TestCase):
         self.assertEqual(resumed, state)
         self.assertEqual(
             set(resumed.connectors),
-            {"linear", *OPTIONAL_CONNECTORS},
+            set(CONNECTORS),
         )
-        self.assertTrue(resumed.receipts["linear"]["verified"])
+        self.assertTrue(
+            resumed.receipts["connectors"]["all_connector_decisions_recorded"]
+        )
 
     def test_later_profile_approval_replaces_earlier_hashes(self) -> None:
         state = record_profile_approval(

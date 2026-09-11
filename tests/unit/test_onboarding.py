@@ -1,6 +1,7 @@
 import unittest
 
 from career_pipeline.onboarding import (
+    CONNECTORS,
     InvalidTransition,
     OnboardingState,
     advance_onboarding,
@@ -11,16 +12,16 @@ from career_pipeline.onboarding import (
 
 class OnboardingTests(unittest.TestCase):
     def test_optional_decline_is_remembered_without_blocking_other_choices(self) -> None:
-        state = OnboardingState.at("optional_connectors")
+        state = OnboardingState.at("connectors")
         updated = record_connector_decision(state, "notion", "declined", ())
         updated = record_connector_decision(updated, "github", "connected", ("read",))
 
         self.assertEqual(updated.connectors["notion"].decision, "declined")
         self.assertEqual(updated.connectors["github"].capabilities, ("read",))
-        self.assertEqual(updated.stage, "optional_connectors")
+        self.assertEqual(updated.stage, "connectors")
 
     def test_installed_connector_missing_action_is_unavailable(self) -> None:
-        state = OnboardingState.at("optional_connectors")
+        state = OnboardingState.at("connectors")
         updated = record_connector_decision(
             state,
             "linkedin",
@@ -31,9 +32,20 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(updated.connectors["linkedin"].decision, "unavailable")
         self.assertEqual(updated.connectors["linkedin"].capabilities, ("people_search",))
 
-    def test_linear_decline_cannot_advance_to_active(self) -> None:
+    def test_all_connectors_may_be_declined_before_activation(self) -> None:
         state = OnboardingState.at("readiness")
-        state = record_connector_decision(state, "linear", "declined", ())
+        for connector in CONNECTORS:
+            state = record_connector_decision(state, connector, "declined", ())
+        state = record_profile_approval(state, "profile-hash", "criteria-hash")
+
+        active = advance_onboarding(state, "active", {"ready": True})
+
+        self.assertEqual(active.stage, "active")
+
+    def test_incomplete_connector_decisions_cannot_activate(self) -> None:
+        state = record_profile_approval(
+            OnboardingState.at("readiness"), "profile-hash", "criteria-hash"
+        )
         with self.assertRaises(InvalidTransition):
             advance_onboarding(state, "active", {"ready": True})
 

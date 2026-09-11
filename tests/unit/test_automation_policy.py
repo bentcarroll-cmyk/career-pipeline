@@ -20,8 +20,21 @@ class AutomationPolicyTests(unittest.TestCase):
             },
         )
         self.assertIn("$discover-jobs", prompt)
+        self.assertIn("canonical local job folders", prompt)
         self.assertIn("Stay quiet", prompt)
         self.assertNotIn("prepare", prompt.lower())
+        self.assertNotIn("Linear", prompt)
+
+    def test_lifecycle_prompt_updates_local_state(self) -> None:
+        prompt = render_automation(
+            "lifecycle",
+            {
+                "workspace_config": "State/config.json",
+                "timezone": "America/New_York",
+            },
+        )
+        self.assertIn("canonical local job status", prompt)
+        self.assertNotIn("Linear", prompt)
 
 
 if __name__ == "__main__":

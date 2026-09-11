@@ -10,8 +10,8 @@ from career_pipeline.automation_policy import (
     default_discovery_schedule,
     lifecycle_available,
 )
-from career_pipeline.capabilities import LINEAR_REQUIRED_ACTIONS, OPTIONAL_CONNECTORS
 from career_pipeline.onboarding import (
+    CONNECTORS,
     OnboardingState,
     record_connector_decision,
     record_profile_approval,
@@ -21,7 +21,7 @@ from career_pipeline.workspace import create_workspace
 
 
 class ActivationScenarioTests(unittest.TestCase):
-    def test_ready_with_linear_and_public_sources_only(self) -> None:
+    def test_ready_with_every_connector_declined_and_public_sources(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             paths = create_workspace(Path(raw) / "Synthetic-Career")
             profile = paths.profile / "Career_Profile.md"
@@ -35,14 +35,7 @@ class ActivationScenarioTests(unittest.TestCase):
                 "Synthetic source resume\n", encoding="utf-8"
             )
             state = OnboardingState.at("readiness")
-            state = record_connector_decision(
-                state,
-                "linear",
-                "connected",
-                LINEAR_REQUIRED_ACTIONS,
-                LINEAR_REQUIRED_ACTIONS,
-            )
-            for connector in OPTIONAL_CONNECTORS:
+            for connector in CONNECTORS:
                 state = record_connector_decision(state, connector, "declined", ())
             state = record_profile_approval(
                 state,
@@ -53,11 +46,6 @@ class ActivationScenarioTests(unittest.TestCase):
                 "workspace_root": str(paths.root),
                 "timezone": "America/New_York",
                 "enabled_sources": ["public_ats"],
-                "linear": {
-                    "workspace_id": "synthetic-workspace",
-                    "team_id": "synthetic-team",
-                    "project_id": "synthetic-project",
-                },
                 "packet_defaults": {
                     "resume_pages": 2,
                     "cover_letter_enabled": True,

@@ -3,25 +3,18 @@ import unittest
 import hashlib
 from pathlib import Path
 
-from career_pipeline.capabilities import OPTIONAL_CONNECTORS
-from career_pipeline.onboarding import OnboardingState, record_connector_decision, record_profile_approval
+from career_pipeline.onboarding import (
+    CONNECTORS,
+    OnboardingState,
+    record_connector_decision,
+    record_profile_approval,
+)
 from career_pipeline.readiness import check_readiness
 from career_pipeline.workspace import create_workspace
 
 
-LINEAR_ACTIONS = (
-    "search_issues",
-    "create_issue",
-    "read_issue",
-    "manage_labels",
-    "manage_views",
-    "comment",
-    "attach_file",
-)
-
-
 class ReadinessTests(unittest.TestCase):
-    def test_profile_approval_and_linear_capabilities_are_required(self) -> None:
+    def test_profile_local_store_and_connector_decisions_are_required(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             paths = create_workspace(Path(raw) / "Synthetic-Career")
             profile = paths.profile / "Career_Profile.md"
@@ -38,11 +31,6 @@ class ReadinessTests(unittest.TestCase):
                 "workspace_root": str(paths.root),
                 "timezone": "America/New_York",
                 "enabled_sources": ["public_ats"],
-                "linear": {
-                    "workspace_id": "synthetic-workspace",
-                    "team_id": "synthetic-team",
-                    "project_id": "synthetic-project",
-                },
                 "packet_defaults": {
                     "resume_pages": 2,
                     "cover_letter_enabled": True,
@@ -50,13 +38,10 @@ class ReadinessTests(unittest.TestCase):
                 },
             }
             report = check_readiness(config, state)
-            self.assertIn("linear_required", report.failure_codes)
             self.assertIn("profile_not_approved", report.failure_codes)
+            self.assertIn("connector_decisions_incomplete", report.failure_codes)
 
-            state = record_connector_decision(
-                state, "linear", "connected", LINEAR_ACTIONS, LINEAR_ACTIONS
-            )
-            for connector in OPTIONAL_CONNECTORS:
+            for connector in CONNECTORS:
                 state = record_connector_decision(state, connector, "declined", ())
             state = record_profile_approval(
                 state,
@@ -64,11 +49,21 @@ class ReadinessTests(unittest.TestCase):
                 hashlib.sha256(criteria.read_bytes()).hexdigest(),
             )
             self.assertTrue(check_readiness(config, state).ready)
+            self.assertTrue((paths.indexes / "backlog.json").is_file())
 
             invalid = {**config, "packet_defaults": {"resume_pages": 1}}
             self.assertIn(
                 "packet_defaults_invalid",
                 check_readiness(invalid, state).failure_codes,
+            )
+
+            (paths.state / "next-job-id.json").write_text(
+                '{"schema_version": 1, "next_id": "invalid"}\n',
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "local_store_invalid",
+                check_readiness(config, state).failure_codes,
             )
 
 
