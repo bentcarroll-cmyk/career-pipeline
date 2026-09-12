@@ -22,7 +22,7 @@ Create or resume a private local-first Career Pipeline workspace through convers
 
 1. Resolve the workspace only from the current conversation or persisted configuration. Never guess a path.
 2. If `State/onboarding-state.json` exists, validate it and resume its recorded stage. Preserve connector declines and permission limits.
-3. Otherwise read [privacy and consent](references/privacy-and-consent.md), explain it, and obtain approval for a workspace root before creating anything.
+3. Otherwise offer the resumable [quick-start path](references/quick-start.md) or the full interview, then read [privacy and consent](references/privacy-and-consent.md), explain it, and obtain approval for a workspace root before creating anything.
 4. Persist a receipt after every completed stage. Read back each local write or external capability test before advancing.
 
 ## Stages
@@ -33,7 +33,7 @@ Run the workspace initializer and validator after approval. Reject a root inside
 
 ### Connectors
 
-Read [connector onboarding](references/connectors.md). Present every connector separately with benefit, intended access, Connect and Skip choices, and fallback. Record `connected`, `declined`, or `unavailable` plus observed actions. No connector may gate the local workspace when a usable public discovery lane exists.
+Read [connector onboarding](references/connectors.md). Present every connector separately with benefit, intended access, Connect, Defer, and Skip choices, and fallback. Record `connected`, `deferred`, `declined`, or `unavailable` plus observed actions. No connector may gate the local workspace when a usable public discovery lane exists.
 
 ### Resume and interview
 

@@ -10,54 +10,57 @@ from career_pipeline.onboarding import (
     advance_onboarding,
     load_onboarding_state,
     record_connector_decision,
+    record_post_activation_progress,
     record_profile_approval,
     save_onboarding_state,
 )
+
+
+def ready_quick_start() -> OnboardingState:
+    state = OnboardingState.quick_start()
+    state = advance_onboarding(state, "workspace", {"privacy_approved": True})
+    state = advance_onboarding(
+        state, "resume", {"workspace_root": "/synthetic/workspace"}
+    )
+    state = advance_onboarding(
+        state, "focus", {"resume_receipt": "source-resume-receipt.json"}
+    )
+    state = advance_onboarding(
+        state,
+        "profile",
+        {
+            "target_work": ["Synthetic operations leadership"],
+            "hard_constraints": [],
+        },
+    )
+    state = record_profile_approval(state, "profile-hash", "criteria-hash")
+    state = advance_onboarding(
+        state,
+        "packet_defaults",
+        {"profile_approved": True, "criteria_approved": True},
+    )
+    state = advance_onboarding(
+        state,
+        "connectors",
+        {"resume_pages": 2, "cover_letter_enabled": True},
+    )
+    for connector in CONNECTORS:
+        state = record_connector_decision(state, connector, "deferred", ())
+    state = advance_onboarding(
+        state, "schedule", {"connector_decisions_recorded": True}
+    )
+    return advance_onboarding(
+        state,
+        "readiness",
+        {"enabled_sources": ["public_ats"]},
+    )
 
 
 class OnboardingScenarioTests(unittest.TestCase):
     def test_quick_start_is_resumable_through_activation(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             path = Path(raw) / "onboarding-state.json"
-            state = OnboardingState.quick_start()
-            state = advance_onboarding(state, "workspace", {"privacy_approved": True})
-            state = advance_onboarding(
-                state, "resume", {"workspace_root": "/synthetic/workspace"}
-            )
-            state = advance_onboarding(
-                state, "focus", {"resume_receipt": "source-resume-receipt.json"}
-            )
-            state = advance_onboarding(
-                state,
-                "profile",
-                {
-                    "target_work": ["Synthetic operations leadership"],
-                    "hard_constraints": [],
-                },
-            )
-            state = record_profile_approval(
-                state, "profile-hash", "criteria-hash"
-            )
-            state = advance_onboarding(
-                state,
-                "packet_defaults",
-                {"profile_approved": True, "criteria_approved": True},
-            )
-            state = advance_onboarding(
-                state,
-                "connectors",
-                {"resume_pages": 2, "cover_letter_enabled": True},
-            )
-            for connector in CONNECTORS:
-                state = record_connector_decision(state, connector, "deferred", ())
-            state = advance_onboarding(
-                state, "schedule", {"connector_decisions_recorded": True}
-            )
-            state = advance_onboarding(
-                state,
-                "readiness",
-                {"enabled_sources": ["public_ats"]},
-            )
+            state = ready_quick_start()
             save_onboarding_state(path, state)
 
             resumed = load_onboarding_state(path)
@@ -72,6 +75,29 @@ class OnboardingScenarioTests(unittest.TestCase):
             loaded.post_activation,
             {"connector_configuration": "pending", "interview": "pending"},
         )
+
+    def test_completed_connector_setup_reopens_when_a_choice_is_redeferred(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "onboarding-state.json"
+            state = advance_onboarding(
+                ready_quick_start(), "active", {"ready": True}
+            )
+            for connector in CONNECTORS:
+                state = record_connector_decision(state, connector, "declined", ())
+            state = record_post_activation_progress(
+                state, "connector_configuration", completed=True
+            )
+
+            reopened = record_connector_decision(
+                state, "github", "deferred", ()
+            )
+            save_onboarding_state(path, reopened)
+            loaded = load_onboarding_state(path)
+
+        self.assertEqual(
+            loaded.post_activation["connector_configuration"], "pending"
+        )
+        self.assertEqual(loaded.connectors["github"].decision, "deferred")
 
     def test_quick_start_requires_focus_and_a_public_discovery_lane(self) -> None:
         state = OnboardingState.quick_start()

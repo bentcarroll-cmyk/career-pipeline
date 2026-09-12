@@ -3,11 +3,12 @@
   "$id": "career-pipeline/actionable-backlog.schema.json",
   "title": "Career Pipeline actionable backlog",
   "type": "object",
-  "required": ["schema_version", "as_of", "source_hash", "ranking_policy", "actions"],
+  "required": ["schema_version", "as_of", "source_hash", "packet_manifest_hash", "ranking_policy", "actions"],
   "properties": {
     "schema_version": {"const": 1},
     "as_of": {"type": "string", "minLength": 1},
     "source_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "packet_manifest_hash": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
     "ranking_policy": {
       "type": "object",
       "required": ["factor_order", "inactive_statuses", "lifecycle_priorities", "deadline_windows_days"],
@@ -38,6 +39,9 @@
           "facts_needing_confirmation",
           "source_freshness",
           "deadline",
+          "packet_stage",
+          "packet_version",
+          "packet_next_action",
           "recommended_next_action",
           "ranking_factors",
           "record_hash"
@@ -67,6 +71,15 @@
             "additionalProperties": false
           },
           "deadline": {"type": ["string", "null"]},
+          "packet_stage": {
+            "type": ["string", "null"],
+            "enum": ["selected", "posting_verified", "drafted", "quality_checked", "saved", "local_verified", null]
+          },
+          "packet_version": {
+            "type": ["string", "null"],
+            "pattern": "^v[0-9]{3}$"
+          },
+          "packet_next_action": {"type": ["string", "null"]},
           "recommended_next_action": {"type": "string", "minLength": 1},
           "ranking_factors": {
             "type": "object",

@@ -213,6 +213,29 @@ def check_readiness(
     if any(name not in onboarding.connectors for name in CONNECTORS):
         failures.append("connector_decisions_incomplete")
     sources = config.get("enabled_sources")
+    if onboarding.mode == "quick_start":
+        schedule_receipt = onboarding.receipts.get("schedule", {})
+        receipt_sources = (
+            schedule_receipt.get("enabled_sources")
+            if isinstance(schedule_receipt, Mapping)
+            else None
+        )
+        actual_source_set = (
+            frozenset(sources)
+            if isinstance(sources, list)
+            and all(isinstance(source, str) for source in sources)
+            else frozenset()
+        )
+        receipt_source_set = (
+            frozenset(receipt_sources)
+            if isinstance(receipt_sources, list)
+            and all(isinstance(source, str) for source in receipt_sources)
+            else frozenset()
+        )
+        if not actual_source_set.intersection(PUBLIC_DISCOVERY_SOURCES):
+            failures.append("quick_start_public_discovery_source_missing")
+        if actual_source_set != receipt_source_set:
+            failures.append("quick_start_discovery_lane_mismatch")
     if not isinstance(sources, list) or not any(
         isinstance(source, str)
         and (

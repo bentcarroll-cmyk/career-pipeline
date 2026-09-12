@@ -9,6 +9,7 @@ from typing import Optional
 from career_pipeline.onboarding import (
     CONNECTORS,
     OnboardingState,
+    advance_onboarding,
     record_connector_decision,
     record_profile_approval,
     save_onboarding_state,
@@ -332,6 +333,66 @@ class ReadinessTests(unittest.TestCase):
             save_onboarding_state(root / "State" / "onboarding-state.json", state)
 
             self.assertTrue(check_readiness(config, state).ready)
+
+    def test_quick_start_public_lane_receipt_must_match_persisted_config(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root, config, approved = self._ready_workspace(Path(raw))
+            state = OnboardingState.quick_start()
+            state = advance_onboarding(state, "workspace", {"privacy_approved": True})
+            state = advance_onboarding(
+                state, "resume", {"workspace_root": str(root)}
+            )
+            state = advance_onboarding(
+                state, "focus", {"resume_receipt": "source-resume-receipt.json"}
+            )
+            state = advance_onboarding(
+                state,
+                "profile",
+                {"target_work": ["Operations"], "hard_constraints": []},
+            )
+            state = record_profile_approval(
+                state, approved.profile_hash, approved.criteria_hash
+            )
+            state = advance_onboarding(
+                state,
+                "packet_defaults",
+                {"profile_approved": True, "criteria_approved": True},
+            )
+            state = advance_onboarding(
+                state,
+                "connectors",
+                {"resume_pages": 2, "cover_letter_enabled": True},
+            )
+            for connector in CONNECTORS:
+                decision = "connected" if connector == "indeed" else "deferred"
+                capabilities = ("search_jobs",) if connector == "indeed" else ()
+                state = record_connector_decision(
+                    state, connector, decision, capabilities
+                )
+            state = advance_onboarding(
+                state, "schedule", {"connector_decisions_recorded": True}
+            )
+            state = advance_onboarding(
+                state,
+                "readiness",
+                {"enabled_sources": ["public_ats"]},
+            )
+            mismatched = {**config, "enabled_sources": ["indeed"]}
+            (root / "State" / "config.json").write_text(
+                json.dumps(mismatched), encoding="utf-8"
+            )
+            save_onboarding_state(root / "State" / "onboarding-state.json", state)
+
+            failures = check_readiness(mismatched, state).failure_codes
+
+            self.assertIn("quick_start_public_discovery_source_missing", failures)
+            self.assertIn("quick_start_discovery_lane_mismatch", failures)
+
+            matched = {**config, "enabled_sources": ["public_ats"]}
+            (root / "State" / "config.json").write_text(
+                json.dumps(matched), encoding="utf-8"
+            )
+            self.assertTrue(check_readiness(matched, state).ready)
 
 
 if __name__ == "__main__":

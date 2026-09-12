@@ -100,7 +100,18 @@ def record_connector_decision(
         decision = "unavailable"
     updated = dict(state.connectors)
     updated[connector] = ConnectorStatus(decision=decision, capabilities=observed)
-    return replace(state, connectors=updated)
+    post_activation = dict(state.post_activation)
+    if (
+        state.mode == "quick_start"
+        and decision == "deferred"
+        and post_activation.get("connector_configuration") == "completed"
+    ):
+        post_activation["connector_configuration"] = "pending"
+    return replace(
+        state,
+        connectors=updated,
+        post_activation=post_activation,
+    )
 
 
 def record_post_activation_progress(
