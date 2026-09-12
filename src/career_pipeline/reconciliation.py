@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from .atomic import atomic_write_json, load_json
 from .contracts import WorkspacePaths
 from .indexes import load_indexes
 from .job_store import _update_job_status_locked, read_job, workspace_lock
+from .timestamps import TimestampError, parse_instant
+
+
+class LifecycleReconciliationError(ValueError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -22,6 +28,8 @@ class LifecycleCandidate:
     title: str
     requisition_id: str | None
     status: str = "new"
+    status_observed_at: str | None = None
+    status_freshness_known: bool = True
 
 
 @dataclass(frozen=True)
@@ -59,6 +67,17 @@ _EVENT_STATUS = {
 _LIFECYCLE_SOURCES = {"gmail", "google-calendar"}
 _JOB_ID = re.compile(r"JOB-[0-9]{6}")
 _SPACE = re.compile(r"\s+")
+_RECEIPT_HASH = re.compile(r"[a-f0-9]{64}")
+_RECEIPT_FIELDS = {
+    "source_kind",
+    "source_receipt_hash",
+    "observed_at",
+    "event_class",
+    "action",
+    "job_id",
+    "target_status",
+    "reason",
+}
 _ALLOWED_TRANSITIONS = {
     "applied": {
         "new",
@@ -144,6 +163,32 @@ def classify_lifecycle_evidence(
             target_status=target_status,
             reason="status_transition_requires_review",
         )
+    if match.status != target_status:
+        if not match.status_freshness_known:
+            return LifecycleDecision(
+                "needs_review",
+                job_id=match.job_id,
+                target_status=target_status,
+                reason="canonical_status_freshness_unavailable",
+            )
+        if match.status_observed_at is not None:
+            try:
+                status_instant = parse_instant(match.status_observed_at)
+                evidence_instant = parse_instant(evidence.observed_at)
+            except TimestampError:
+                return LifecycleDecision(
+                    "needs_review",
+                    job_id=match.job_id,
+                    target_status=target_status,
+                    reason="lifecycle_evidence_freshness_unavailable",
+                )
+            if status_instant > evidence_instant:
+                return LifecycleDecision(
+                    "needs_review",
+                    job_id=match.job_id,
+                    target_status=target_status,
+                    reason="canonical_status_newer_than_evidence",
+                )
     return LifecycleDecision(
         "apply_update",
         job_id=match.job_id,
@@ -174,6 +219,11 @@ def _candidates(workspace: WorkspacePaths) -> tuple[LifecycleCandidate, ...]:
         if not job_dir.is_dir() or _JOB_ID.fullmatch(job_dir.name) is None:
             continue
         record = read_job(workspace, job_dir.name)
+        status_observed_at, freshness_known = _latest_status_observation(
+            job_dir / "events.jsonl",
+            job_dir.name,
+            str(record["status"]),
+        )
         candidates.append(
             LifecycleCandidate(
                 job_id=job_dir.name,
@@ -185,9 +235,43 @@ def _candidates(workspace: WorkspacePaths) -> tuple[LifecycleCandidate, ...]:
                     else None
                 ),
                 status=str(record["status"]),
+                status_observed_at=status_observed_at,
+                status_freshness_known=freshness_known,
             )
         )
     return tuple(candidates)
+
+
+def _latest_status_observation(
+    events_path: Path,
+    job_id: str,
+    status: str,
+) -> tuple[str | None, bool]:
+    latest_value: str | None = None
+    latest_instant = None
+    try:
+        lines = events_path.read_text(encoding="utf-8").splitlines()
+        for line in lines:
+            event = json.loads(line)
+            if not isinstance(event, Mapping):
+                return None, False
+            if event.get("job_id") != job_id:
+                return None, False
+            occurred_at = event.get("occurred_at")
+            event_status = event.get("status")
+            if not isinstance(occurred_at, str) or not isinstance(
+                event_status, str
+            ):
+                return None, False
+            occurred_instant = parse_instant(occurred_at)
+            if event_status == status and (
+                latest_instant is None or occurred_instant > latest_instant
+            ):
+                latest_value = occurred_at
+                latest_instant = occurred_instant
+    except (OSError, UnicodeError, ValueError, TimestampError):
+        return None, False
+    return latest_value, latest_value is not None
 
 
 def _seen_receipts(workspace: WorkspacePaths) -> dict[str, Path]:
@@ -195,12 +279,132 @@ def _seen_receipts(workspace: WorkspacePaths) -> dict[str, Path]:
     for path in sorted((workspace.runs / "lifecycle").glob("receipt-*.json")):
         try:
             receipt = load_json(path)
-        except (OSError, ValueError):
-            continue
-        receipt_hash = receipt.get("source_receipt_hash")
-        if isinstance(receipt_hash, str):
-            seen[receipt_hash] = path
+        except (OSError, UnicodeError, ValueError):
+            raise LifecycleReconciliationError(
+                "lifecycle receipt is invalid: unreadable"
+            ) from None
+        _validate_receipt(path, receipt)
+        receipt_hash = str(receipt["source_receipt_hash"])
+        if receipt_hash in seen and seen[receipt_hash] != path:
+            raise LifecycleReconciliationError(
+                "lifecycle receipts are invalid: duplicate_source_hash"
+            )
+        seen[receipt_hash] = path
     return seen
+
+
+def _validate_receipt(path: Path, receipt: Mapping[str, object]) -> None:
+    receipt_hash = receipt.get("source_receipt_hash")
+    source_kind = receipt.get("source_kind")
+    observed_at = receipt.get("observed_at")
+    event_class = receipt.get("event_class")
+    action = receipt.get("action")
+    job_id = receipt.get("job_id")
+    target_status = receipt.get("target_status")
+    reason = receipt.get("reason")
+    expected_name = (
+        f"receipt-{receipt_hash[:20]}.json"
+        if isinstance(receipt_hash, str)
+        else None
+    )
+    if (
+        set(receipt) != _RECEIPT_FIELDS
+        or not isinstance(source_kind, str)
+        or source_kind not in _LIFECYCLE_SOURCES
+        or not isinstance(receipt_hash, str)
+        or _RECEIPT_HASH.fullmatch(receipt_hash) is None
+        or path.name != expected_name
+        or not isinstance(observed_at, str)
+        or not observed_at.strip()
+        or not isinstance(event_class, str)
+        or not event_class.strip()
+        or not isinstance(action, str)
+        or action not in {"apply_update", "needs_review", "ignore"}
+        or (job_id is not None and (
+            not isinstance(job_id, str) or _JOB_ID.fullmatch(job_id) is None
+        ))
+        or (
+            target_status is not None
+            and (
+                not isinstance(target_status, str)
+                or target_status not in set(_EVENT_STATUS.values())
+            )
+        )
+        or not isinstance(reason, str)
+        or not reason.strip()
+        or (action == "apply_update" and (job_id is None or target_status is None))
+    ):
+        raise LifecycleReconciliationError(
+            "lifecycle receipt is invalid: receipt_contract"
+        )
+
+
+def _committed_lifecycle_result(
+    workspace: WorkspacePaths,
+    evidence: LifecycleEvidence,
+    receipt_hash: str,
+) -> tuple[LifecycleDecision, dict[str, object]] | None:
+    matches: list[tuple[LifecycleDecision, dict[str, object]]] = []
+    for job_dir in sorted(workspace.jobs.iterdir(), key=lambda path: path.name):
+        if not job_dir.is_dir() or _JOB_ID.fullmatch(job_dir.name) is None:
+            continue
+        try:
+            lines = (job_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError):
+            continue
+        for line in lines:
+            try:
+                event = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(event, Mapping):
+                continue
+            metadata = event.get("metadata")
+            if not isinstance(metadata, Mapping):
+                continue
+            if metadata.get("source_receipt_hash") != receipt_hash:
+                continue
+            event_class = metadata.get("event_class")
+            target_status = event.get("status")
+            occurred_at = event.get("occurred_at")
+            source_kind = metadata.get("source_kind", evidence.source_kind)
+            decision_reason = metadata.get(
+                "lifecycle_decision_reason",
+                "exact_unambiguous_evidence",
+            )
+            if (
+                event.get("event_type") != "status_changed"
+                or event.get("job_id") != job_dir.name
+                or not isinstance(event_class, str)
+                or event_class not in _EVENT_STATUS
+                or target_status != _EVENT_STATUS[event_class]
+                or not isinstance(occurred_at, str)
+                or not occurred_at.strip()
+                or source_kind != evidence.source_kind
+                or not isinstance(decision_reason, str)
+                or not decision_reason.strip()
+            ):
+                raise LifecycleReconciliationError(
+                    "committed lifecycle evidence is invalid: event_conflict"
+                )
+            decision = LifecycleDecision(
+                "apply_update",
+                job_id=job_dir.name,
+                target_status=str(target_status),
+                reason=decision_reason,
+            )
+            receipt = minimal_receipt(evidence, decision)
+            receipt["observed_at"] = occurred_at
+            receipt["event_class"] = event_class
+            matches.append((decision, receipt))
+    if not matches:
+        return None
+    first = matches[0]
+    if any(item != first for item in matches[1:]):
+        raise LifecycleReconciliationError(
+            "committed lifecycle evidence is invalid: duplicate_conflict"
+        )
+    return first
 
 
 def reconcile_lifecycle_evidence(
@@ -214,45 +418,73 @@ def reconcile_lifecycle_evidence(
         workspace.runs / "lifecycle" / f"receipt-{receipt_hash[:20]}.json"
     )
     rebuild_indexes = False
+    result: ReconciliationResult | None = None
     with workspace_lock(workspace):
         seen = _seen_receipts(workspace)
-        decision = classify_lifecycle_evidence(
-            evidence,
-            _candidates(workspace),
-            tuple(seen),
-            enabled_sources=enabled_sources,
-        )
-        if decision.reason == "evidence_already_seen":
-            return ReconciliationResult(decision, seen[receipt_hash])
-        if decision.reason == "source_not_enabled_for_lifecycle":
-            return ReconciliationResult(decision, None)
-        if decision.action == "apply_update":
-            assert decision.job_id is not None
-            assert decision.target_status is not None
-            committed = _update_job_status_locked(
-                workspace,
-                decision.job_id,
-                decision.target_status,
-                occurred_at=evidence.observed_at,
-                metadata={
-                    "source_receipt_hash": receipt_hash,
-                    "event_class": evidence.event_class,
-                },
-                allowed_prior_statuses=frozenset(
-                    _ALLOWED_TRANSITIONS[decision.target_status]
-                ),
+        if receipt_hash in seen:
+            decision = LifecycleDecision(
+                "ignore",
+                reason="evidence_already_seen",
             )
-            if committed["status"] != decision.target_status:
-                decision = LifecycleDecision(
-                    "needs_review",
-                    job_id=decision.job_id,
-                    target_status=decision.target_status,
-                    reason="status_transition_requires_review",
+            return ReconciliationResult(decision, seen[receipt_hash])
+        if receipt_path.exists():
+            raise LifecycleReconciliationError(
+                "lifecycle receipt is invalid: source_hash_conflict"
+            )
+        committed_result = _committed_lifecycle_result(
+            workspace,
+            evidence,
+            receipt_hash,
+        )
+        if committed_result is not None:
+            decision, receipt = committed_result
+            _validate_receipt(receipt_path, receipt)
+            atomic_write_json(receipt_path, receipt)
+            result = ReconciliationResult(decision, receipt_path)
+            rebuild_indexes = True
+        else:
+            decision = classify_lifecycle_evidence(
+                evidence,
+                _candidates(workspace),
+                (),
+                enabled_sources=enabled_sources,
+            )
+            if decision.reason == "source_not_enabled_for_lifecycle":
+                return ReconciliationResult(decision, None)
+            if decision.action == "apply_update":
+                assert decision.job_id is not None
+                assert decision.target_status is not None
+                committed = _update_job_status_locked(
+                    workspace,
+                    decision.job_id,
+                    decision.target_status,
+                    occurred_at=evidence.observed_at,
+                    metadata={
+                        "source_receipt_hash": receipt_hash,
+                        "source_kind": evidence.source_kind,
+                        "event_class": evidence.event_class,
+                        "lifecycle_decision_action": decision.action,
+                        "lifecycle_decision_reason": decision.reason,
+                        "lifecycle_target_status": decision.target_status,
+                    },
+                    allowed_prior_statuses=frozenset(
+                        _ALLOWED_TRANSITIONS[decision.target_status]
+                    ),
                 )
-            else:
-                rebuild_indexes = True
-        if not receipt_path.exists():
-            atomic_write_json(receipt_path, minimal_receipt(evidence, decision))
+                if committed["status"] != decision.target_status:
+                    decision = LifecycleDecision(
+                        "needs_review",
+                        job_id=decision.job_id,
+                        target_status=decision.target_status,
+                        reason="status_transition_requires_review",
+                    )
+                else:
+                    rebuild_indexes = True
+            receipt = minimal_receipt(evidence, decision)
+            _validate_receipt(receipt_path, receipt)
+            atomic_write_json(receipt_path, receipt)
+            result = ReconciliationResult(decision, receipt_path)
     if rebuild_indexes:
         load_indexes(workspace)
-    return ReconciliationResult(decision, receipt_path)
+    assert result is not None
+    return result

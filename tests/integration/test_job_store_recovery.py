@@ -3,16 +3,21 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
 from career_pipeline.evaluation import EvidenceClaim, JobAssessment
 from career_pipeline.job_store import (
     JobStoreError,
+    WorkspaceLockedError,
     _commit_job_mutation_locked,
+    _update_job_status_locked,
     create_job,
     read_job,
+    reverify_job,
     update_job_status,
     workspace_lock,
 )
@@ -56,6 +61,96 @@ def assessment() -> JobAssessment:
 
 
 class JobStoreRecoveryTests(unittest.TestCase):
+    def test_lock_required_helper_rejects_a_different_thread_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = create_job(
+                workspace,
+                candidate(),
+                assessment(),
+                posting_markdown="# Synthetic posting\n",
+                assessment_markdown="# Synthetic assessment\n",
+                occurred_at="2026-09-11T12:00:00Z",
+            )["job_id"]
+            failures: list[BaseException] = []
+
+            def attempt_without_thread_ownership() -> None:
+                try:
+                    _update_job_status_locked(
+                        workspace,
+                        job_id,
+                        "applied",
+                        occurred_at="2026-09-11T12:05:00Z",
+                    )
+                except BaseException as exc:
+                    failures.append(exc)
+
+            with workspace_lock(workspace):
+                contender = threading.Thread(target=attempt_without_thread_ownership)
+                contender.start()
+                contender.join()
+
+            self.assertEqual(len(failures), 1)
+            self.assertIsInstance(failures[0], WorkspaceLockedError)
+            self.assertEqual(read_job(workspace, job_id)["status"], "new")
+
+    def test_reverification_rejects_non_utf8_text_before_publishing_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = create_job(
+                workspace,
+                candidate(),
+                assessment(),
+                posting_markdown="# Original synthetic posting\n",
+                assessment_markdown="# Original synthetic assessment\n",
+                occurred_at="2026-09-11T12:00:00Z",
+            )["job_id"]
+            job_dir = workspace.jobs / job_id
+            before = {
+                name: (job_dir / name).read_bytes()
+                for name in ("job.json", "posting.md", "assessment.md", "events.jsonl")
+            }
+            changed = replace(
+                candidate(),
+                verified_at="2026-09-11T14:05:00Z",
+                raw_field_hash="c" * 64,
+            )
+
+            with self.assertRaises(JobStoreError) as raised:
+                reverify_job(
+                    workspace,
+                    job_id,
+                    changed,
+                    assessment(),
+                    posting_markdown="# Invalid synthetic posting\ud800",
+                    assessment_markdown="# Changed synthetic assessment\n",
+                    occurred_at="2026-09-11T14:06:00Z",
+                )
+
+            self.assertIn(job_id, str(raised.exception))
+            self.assertFalse(
+                (job_dir / "working" / "pending-mutation.json").exists()
+            )
+            self.assertEqual(
+                before,
+                {
+                    name: (job_dir / name).read_bytes()
+                    for name in (
+                        "job.json",
+                        "posting.md",
+                        "assessment.md",
+                        "events.jsonl",
+                    )
+                },
+            )
+            updated = update_job_status(
+                workspace,
+                job_id,
+                "applied",
+                occurred_at="2026-09-11T12:10:00Z",
+            )
+            self.assertEqual(updated["status"], "applied")
+
     def test_invalid_pending_payload_is_rejected_before_journal_publish(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace = create_workspace(Path(raw) / "Synthetic-Career")
@@ -99,6 +194,65 @@ class JobStoreRecoveryTests(unittest.TestCase):
             )
             self.assertEqual(updated["status"], "applied")
 
+    def test_corrupt_proposed_journal_types_never_publish(self) -> None:
+        corruptions = {
+            "event_status_array": lambda updated, event, files: event.update(
+                {"status": []}
+            ),
+            "event_prior_status_object": lambda updated, event, files: event.update(
+                {"prior_status": {}}
+            ),
+            "job_status_array": lambda updated, event, files: updated.update(
+                {"status": []}
+            ),
+            "job_disposition_object": lambda updated, event, files: updated.update(
+                {"disposition": {}}
+            ),
+            "file_update_array": lambda updated, event, files: files.update(
+                {"posting.md": []}
+            ),
+        }
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = create_job(
+                workspace,
+                candidate(),
+                assessment(),
+                posting_markdown="# Synthetic posting\n",
+                assessment_markdown="# Synthetic assessment\n",
+                occurred_at="2026-09-11T12:00:00Z",
+            )["job_id"]
+            pending_path = (
+                workspace.jobs / job_id / "working" / "pending-mutation.json"
+            )
+            for name, corrupt in corruptions.items():
+                with self.subTest(name=name), workspace_lock(workspace):
+                    updated = read_job(workspace, job_id)
+                    updated["status"] = "applied"
+                    event = {
+                        "schema_version": 1,
+                        "event_type": "status_changed",
+                        "occurred_at": "2026-09-11T12:05:00Z",
+                        "job_id": job_id,
+                        "prior_status": "new",
+                        "status": "applied",
+                        "metadata": {},
+                    }
+                    file_updates = {}
+                    corrupt(updated, event, file_updates)
+
+                    with self.assertRaises(JobStoreError) as raised:
+                        _commit_job_mutation_locked(
+                            workspace,
+                            job_id,
+                            updated,
+                            event,
+                            file_updates,
+                        )
+
+                    self.assertIn(job_id, str(raised.exception))
+                    self.assertFalse(pending_path.exists())
+
     def test_preexisting_corrupt_journal_fails_closed_with_content_free_job_id(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace = create_workspace(Path(raw) / "Synthetic-Career")
@@ -132,6 +286,66 @@ class JobStoreRecoveryTests(unittest.TestCase):
             self.assertIn(job_id, diagnostic)
             self.assertNotIn(private_marker, diagnostic)
             self.assertTrue(pending_path.is_file())
+
+    def test_corrupt_journal_shapes_are_always_job_scoped_store_errors(self) -> None:
+        corruptions = {
+            "event_status_array": lambda journal: journal["event"].update(
+                {"status": []}
+            ),
+            "event_prior_status_object": lambda journal: journal["event"].update(
+                {"prior_status": {}}
+            ),
+            "job_status_array": lambda journal: journal["updated_job"].update(
+                {"status": []}
+            ),
+            "job_disposition_object": lambda journal: journal[
+                "updated_job"
+            ].update({"disposition": {}}),
+            "file_update_array": lambda journal: journal["file_updates"].update(
+                {"posting.md": []}
+            ),
+        }
+        for name, corrupt in corruptions.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw:
+                workspace = create_workspace(Path(raw) / "Synthetic-Career")
+                job_id = create_job(
+                    workspace,
+                    candidate(),
+                    assessment(),
+                    posting_markdown="# Synthetic posting\n",
+                    assessment_markdown="# Synthetic assessment\n",
+                    occurred_at="2026-09-11T12:00:00Z",
+                )["job_id"]
+                updated = read_job(workspace, job_id)
+                updated["status"] = "applied"
+                journal = {
+                    "schema_version": 1,
+                    "job_id": job_id,
+                    "updated_job": updated,
+                    "event": {
+                        "schema_version": 1,
+                        "event_type": "status_changed",
+                        "occurred_at": "2026-09-11T12:05:00Z",
+                        "job_id": job_id,
+                        "prior_status": "new",
+                        "status": "applied",
+                        "metadata": {},
+                    },
+                    "file_updates": {},
+                }
+                corrupt(journal)
+                pending_path = (
+                    workspace.jobs / job_id / "working" / "pending-mutation.json"
+                )
+                pending_path.write_text(json.dumps(journal), encoding="utf-8")
+
+                with self.assertRaises(JobStoreError) as raised:
+                    with workspace_lock(workspace):
+                        pass
+
+                self.assertIn(job_id, str(raised.exception))
+                self.assertTrue(pending_path.is_file())
+
 
     def test_process_exit_releases_workspace_lock_ownership(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

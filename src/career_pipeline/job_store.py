@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
@@ -59,7 +60,7 @@ _STATUSES = {
     "not_pursuing",
     "closed",
 }
-_HELD_LOCKS: set[Path] = set()
+_HELD_LOCKS: dict[Path, int] = {}
 _PENDING_MUTATION = "pending-mutation.json"
 _PRE_APPLICATION_STATUSES = frozenset(
     {"new", "needs_confirmation", "prepare_application", "packet_ready"}
@@ -100,7 +101,7 @@ def workspace_lock(workspace: WorkspacePaths) -> Iterator[None]:
         if exc.errno in (errno.EACCES, errno.EAGAIN):
             raise WorkspaceLockedError("workspace mutation is already in progress") from exc
         raise
-    _HELD_LOCKS.add(resolved_lock)
+    _HELD_LOCKS[resolved_lock] = threading.get_ident()
     try:
         os.ftruncate(descriptor, 0)
         os.write(descriptor, f"pid={os.getpid()}\n".encode("ascii"))
@@ -109,7 +110,7 @@ def workspace_lock(workspace: WorkspacePaths) -> Iterator[None]:
         _recover_all_pending_mutations_locked(workspace)
         yield
     finally:
-        _HELD_LOCKS.discard(resolved_lock)
+        _HELD_LOCKS.pop(resolved_lock, None)
         fcntl.flock(descriptor, fcntl.LOCK_UN)
         os.close(descriptor)
 
@@ -373,10 +374,10 @@ def _recover_pending_mutation_locked(
         updated = journal["updated_job"]
         event = journal["event"]
         file_updates = journal.get("file_updates", {})
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError):
         raise JobStoreError(
             f"pending canonical mutation for {job_id} is unreadable"
-        ) from exc
+        ) from None
     _validate_pending_mutation_payload(job_id, journal)
     event_line = json.dumps(event, sort_keys=True, separators=(",", ":"))
     events_path = job_dir / "events.jsonl"
@@ -428,10 +429,10 @@ def _validate_pending_mutation_payload(
         updated = journal["updated_job"]
         event = journal["event"]
         file_updates = journal.get("file_updates", {})
-    except (KeyError, TypeError) as exc:
+    except (KeyError, TypeError):
         raise JobStoreError(
             f"pending canonical mutation for {job_id} is invalid: journal_shape"
-        ) from exc
+        ) from None
     allowed_journal_fields = {
         "schema_version",
         "job_id",
@@ -439,6 +440,10 @@ def _validate_pending_mutation_payload(
         "event",
         "file_updates",
     }
+    event_status = event.get("status") if isinstance(event, Mapping) else None
+    prior_status = (
+        event.get("prior_status") if isinstance(event, Mapping) else None
+    )
     if (
         journal.get("schema_version") != 1
         or journal.get("job_id") != job_id
@@ -461,7 +466,6 @@ def _validate_pending_mutation_payload(
         "status",
         "metadata",
     }
-    prior_status = event.get("prior_status")
     if (
         event.get("schema_version") != 1
         or set(event) - allowed_event_fields
@@ -469,9 +473,16 @@ def _validate_pending_mutation_payload(
         or not str(event.get("event_type", "")).strip()
         or not isinstance(event.get("occurred_at"), str)
         or not str(event.get("occurred_at", "")).strip()
-        or event.get("status") not in _STATUSES
-        or (prior_status is not None and prior_status not in _STATUSES)
-        or event.get("status") != updated.get("status")
+        or not isinstance(event_status, str)
+        or event_status not in _STATUSES
+        or (
+            prior_status is not None
+            and (
+                not isinstance(prior_status, str)
+                or prior_status not in _STATUSES
+            )
+        )
+        or event_status != updated.get("status")
         or not isinstance(event.get("metadata"), Mapping)
         or not set(file_updates).issubset({"posting.md", "assessment.md"})
         or not all(
@@ -482,17 +493,42 @@ def _validate_pending_mutation_payload(
         raise JobStoreError(
             f"pending canonical mutation for {job_id} is invalid: event_or_files"
         )
-    errors = validate_document("job", updated)
+    try:
+        errors = validate_document("job", updated)
+    except (AttributeError, TypeError, ValueError):
+        raise JobStoreError(
+            f"pending canonical mutation for {job_id} is invalid: job_shape"
+        ) from None
     if errors:
         raise JobStoreError(
             f"pending canonical mutation for {job_id} is invalid: {errors[0].code}"
         )
     try:
         json.dumps(journal, allow_nan=False, sort_keys=True)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError):
         raise JobStoreError(
             f"pending canonical mutation for {job_id} is invalid: json_value"
-        ) from exc
+        ) from None
+    try:
+        _validate_utf8_strings(journal)
+    except UnicodeEncodeError:
+        raise JobStoreError(
+            f"pending canonical mutation for {job_id} is invalid: utf8_text"
+        ) from None
+
+
+def _validate_utf8_strings(value: object) -> None:
+    if isinstance(value, str):
+        value.encode("utf-8")
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _validate_utf8_strings(key)
+            _validate_utf8_strings(item)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _validate_utf8_strings(item)
 
 
 def reverify_job(
@@ -655,7 +691,9 @@ def _update_job_status_locked(
 ) -> dict[str, object]:
     """Commit a constrained status change while the workspace lock is held."""
 
-    if (workspace.state / ".workspace.lock").resolve() not in _HELD_LOCKS:
+    if _HELD_LOCKS.get(
+        (workspace.state / ".workspace.lock").resolve()
+    ) != threading.get_ident():
         raise WorkspaceLockedError("workspace mutation lock is required")
     if status not in _STATUSES:
         raise JobStoreError("unsupported job status")
