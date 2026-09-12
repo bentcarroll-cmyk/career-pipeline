@@ -1,0 +1,41 @@
+name: Share beta feedback
+description: Tell us how setup, job relevance, and application materials worked.
+title: "[Feedback] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feedback is voluntary and visible to everyone with repository access.
+        Describe the experience without uploading personal career materials.
+  - type: input
+    id: version
+    attributes:
+      label: Plugin version and operating system
+      placeholder: 0.1.1, macOS
+    validations:
+      required: true
+  - type: dropdown
+    id: setup
+    attributes:
+      label: How did setup go?
+      options:
+        - Completed independently
+        - Completed with help
+        - Could not complete
+        - Have not tried yet
+    validations:
+      required: true
+  - type: textarea
+    id: confusion
+    attributes:
+      label: Where did setup or onboarding get confusing?
+  - type: textarea
+    id: relevance
+    attributes:
+      label: Were the roles relevant?
+      description: Describe any criteria it missed, or say you have not searched yet.
+  - type: textarea
+    id: materials
+    attributes:
+      label: What needed correction in the application materials?
+      description: Describe corrections without attaching private documents, or say you have not prepared a packet yet.

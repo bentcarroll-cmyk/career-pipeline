@@ -33,6 +33,12 @@ class PackagingTests(unittest.TestCase):
                 self.assertIn(".agents/plugins/marketplace.json", names)
                 self.assertIn("skills/onboard/SKILL.md", names)
                 self.assertIn("docs/private-beta-installation.md", names)
+                self.assertIn("docs/private-beta-upgrades.md", names)
+                self.assertIn("docs/beta-testing.md", names)
+                self.assertIn("docs/releasing.md", names)
+                self.assertIn("README.md", names)
+                self.assertIn("LICENSE", names)
+                self.assertIn("scripts/check_environment.py", names)
                 self.assertIn("CHANGELOG.md", names)
                 self.assertFalse(any(name.startswith("tests/") for name in names))
                 self.assertFalse(any("__pycache__" in name for name in names))
@@ -48,6 +54,17 @@ class PackagingTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(validation.returncode, 0, validation.stdout + validation.stderr)
+            extracted = output / "extracted"
+            with zipfile.ZipFile(first.archive) as bundle:
+                bundle.extractall(extracted)
+            preflight = subprocess.run(
+                [sys.executable, "-S", str(extracted / "scripts" / "check_environment.py")],
+                cwd=output,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(preflight.returncode, 0, preflight.stdout + preflight.stderr)
 
     def test_archive_rejects_an_obvious_credential_bearing_runtime_member(self) -> None:
         repository = Path(__file__).resolve().parents[2]

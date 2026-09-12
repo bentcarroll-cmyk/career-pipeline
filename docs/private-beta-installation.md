@@ -1,61 +1,106 @@
-# Career Pipeline private-beta installation
+# Install the private beta
 
-Career Pipeline is a local-first Codex Desktop plugin. Its user workspace is the sole system of record; the plugin package does not contain user data and sends no telemetry.
+This guide is for invited testers using Codex Desktop on macOS. The recommended path is a release ZIP and guided setup in Codex. It does not require Git command-line authentication or a `pip` installation.
 
-## Verify and install
+## Before you begin
 
-1. Keep `career-pipeline-plugin.zip` and its `.sha256` file together. From that directory, verify the package:
+- Accept your invitation to [the private repository](https://github.com/bentcarroll-cmyk/career-pipeline) and sign in to GitHub. A missing page or download may mean you are signed in to the wrong account or have not accepted the invitation.
+- Have Codex Desktop installed and signed in on **macOS**, with plugin support available. Local package checks have been validated on macOS; installation on a new tester's Mac remains part of beta testing. **Native Windows is unsupported** by the current workspace locking, and **Linux has not been validated**.
+- The local helpers require **Python 3.11 or newer**. Your computer's `python3` may be older; Codex can check for a suitable runtime it provides. No extra Python packages are needed for the core helpers.
+- Job discovery needs an available web capability. Final application packets also need Codex document and PDF capabilities. Connectors such as Linear, Gmail, and Google Drive are optional.
 
-   ```bash
-   shasum -a 256 -c career-pipeline-plugin.zip.sha256
-   ```
+The guided path has package checks and a synthetic local workflow test. A complete installation and real job search on a new tester's computer remain part of beta testing.
 
-2. Extract the ZIP into a new local directory. Do not place a Career Pipeline user workspace inside that directory.
-3. Register the extracted directory as a local marketplace:
+## Recommended: download a release and ask Codex to install it
 
-   ```bash
-   codex plugin marketplace add <absolute-path-to-extracted-directory>
-   ```
+1. Open [Releases](https://github.com/bentcarroll-cmyk/career-pipeline/releases). Download both `career-pipeline-plugin.zip` and `career-pipeline-plugin.zip.sha256` from the newest release's **Assets**. Use those files, rather than GitHub's automatic “Source code” downloads. The initial friend-testing release is [v0.1.1](https://github.com/bentcarroll-cmyk/career-pipeline/releases/tag/v0.1.1).
+2. Keep the ZIP and checksum together, and extract the ZIP into a new folder. Choose a stable location you will keep, such as a `Career Pipeline Plugin` folder inside Documents. The plugin root is the folder containing `README.md`, `scripts/`, and `skills/`.
+3. In Codex, open a task with access to that extracted folder. Paste the prompt below, replacing the two bracketed paths with your actual folders. Codex may ask for access needed to read the download or install the plugin.
 
-4. Install the plugin:
+```text
+Install this Career Pipeline private beta for me.
 
-   ```bash
-   codex plugin add career-pipeline@career-pipeline-private-beta
-   ```
+Extracted plugin folder: [full path to the extracted plugin folder]
+Download folder containing the ZIP and its .sha256 file: [full path to the download folder]
 
-5. Start a new Codex task and ask: `Set up my job search.` New tasks pick up newly installed plugin skills.
+Read docs/private-beta-installation.md in the extracted plugin folder first.
+Verify the release ZIP checksum before installing. Use an available Python 3.11+
+runtime, including Codex's provided runtime if appropriate, to run
+scripts/check_environment.py and scripts/validate_plugin.py on the extracted
+plugin. The core helpers do not need pip packages.
 
-The packet verifier ships inside the plugin and does not rely on Python packages from the host. It structurally validates final PDFs with classic cross-reference tables and a directly readable catalog and page tree. Encrypted PDFs, cross-reference streams, and compressed object streams fail closed; regenerate those files with a standard PDF export before marking a packet ready.
+Inspect the available Codex plugin commands and existing marketplaces. If
+career-pipeline-private-beta is already registered, follow the upgrade guide
+instead of creating a duplicate. Register this extracted folder as the local
+marketplace and install career-pipeline@career-pipeline-private-beta using
+the available Codex runtime. Read back the installed plugin and version.
 
-## Packaged private-beta smoke check
-
-Before distributing a private-beta build, run this offline smoke check from a clean source checkout. It creates only temporary synthetic data and does not install the plugin, contact a connector, or write to an external service.
-
-```bash
-python3 -m unittest tests.unit.test_packaging.PackagingTests.test_extracted_package_completes_synthetic_local_journey -v
+Keep my job-search workspace separate from the plugin folder. After the
+installation succeeds, tell me to start a new task with “Set up my job search.”
+If a required runtime or plugin command is unavailable, explain the specific
+missing requirement and the next step without claiming installation succeeded.
 ```
 
-The check builds a deterministic archive, verifies its generated checksum, extracts it into a temporary directory, and runs the extracted runtime with `python -S`. It completes the real quick-start transitions and readiness gate, delivers a synthetic public discovery result, builds the actionable backlog, creates a packet with a structurally valid two-page PDF, verifies the final local artifact receipt, and diagnoses every persisted document created by the journey.
+4. After Codex confirms installation, start a **new task** and say **“Set up my job search.”** Newly installed skills are picked up in new tasks.
+5. During onboarding, choose a separate private workspace for your résumé, profile, saved jobs, and application files. Review your career profile and search criteria before approving them. You can defer or skip connectors and leave schedules disabled.
 
-For a release candidate, also run the full test suite and these package checks:
+Guided setup means Codex performs the checks and supported installation commands with you. It is not a promise that every Codex version or computer has an identical installation interface.
+
+## Terminal fallback: install the downloaded ZIP
+
+Use this path if you prefer commands. `codex` must resolve to a Codex executable with plugin support. Check its help if your installed version differs. In the examples, `python3` means a verified Python 3.11+ executable; substitute its full path when needed.
+
+From the download directory, verify the ZIP:
 
 ```bash
-python3 scripts/package_plugin.py --output dist
-python3 scripts/validate_plugin.py dist/career-pipeline-plugin.zip
-python3 scripts/scan_private_data.py dist/career-pipeline-plugin.zip
-cd dist && shasum -a 256 -c career-pipeline-plugin.zip.sha256
+shasum -a 256 -c career-pipeline-plugin.zip.sha256
 ```
 
-## Local data and consent boundaries
+Continue only if it reports `career-pipeline-plugin.zip: OK`. If it fails, download both files again from the same release. A matching checksum confirms the ZIP matches the supplied checksum; it does not replace checking that you downloaded from the intended repository.
 
-During onboarding, choose a workspace outside the plugin directory. Every connector is optional, including Linear. Public ATS sources can support activation when all connectors are declined.
+From the extracted plugin root, run the preflight and manifest check:
 
-The selected workspace owns all durable state. Each role lives under `Jobs/JOB-000123/`; disposable views live under `Indexes/`. Final PDFs are directly browseable under `Applications/<job-and-role>/vNNN/`. Source résumés, profiles, job records, drafts, packets, and receipts remain in that workspace.
+```bash
+python3 scripts/check_environment.py
+python3 scripts/validate_plugin.py
+```
 
-Application packets begin only after an explicit current request and are created immediately. Scheduled discovery or lifecycle checks never prepare packets. Career Pipeline does not submit applications, send messages, accept invitations, or create calendar events.
+The preflight is read-only. It checks the platform's required locking support, Python version, and package runtime, versions, and identifiers. A passing check on Linux does not mean that environment has been validated for this beta. It can report that the Codex command is unavailable on your shell path even when Codex Desktop provides it; use the guided path to locate the available runtime. It does not test your account, GitHub permissions, connectors, or the entire desktop installation flow.
 
-Linear is available only as an explicit optional export. A failed or unavailable export never changes the local job, packet, ID, or status.
+Register and install, replacing the example path with the extracted plugin root:
 
-## Updating
+```bash
+codex plugin marketplace add "/full/path/to/Career Pipeline Plugin"
+codex plugin add career-pipeline@career-pipeline-private-beta
+```
 
-Keep the user workspace separate and do not delete it when updating the plugin. Verify and extract the new package, then follow [the private-beta upgrade procedure](private-beta-upgrades.md) for any workspace schema change before reinstalling the plugin. Backed-up migrations never contact connectors and preserve source documents, canonical jobs, event history, and application versions.
+If the marketplace already exists, follow the [upgrade guide](private-beta-upgrades.md). Keep the extracted folder available, then start a new Codex task with **“Set up my job search.”**
+
+## Alternative: install from the private GitHub repository
+
+This route needs authenticated Git access to the private repository, in addition to your GitHub invitation. Signing in through a browser alone does not necessarily provide Git credentials. If Git authentication is unfamiliar or fails, use the release ZIP route above.
+
+For the initial friend-testing release:
+
+```bash
+codex plugin marketplace add bentcarroll-cmyk/career-pipeline --ref v0.1.1
+codex plugin add career-pipeline@career-pipeline-private-beta
+```
+
+The marketplace is pinned to that release tag. For a later version, use the exact tag from its release and follow the [upgrade guide](private-beta-upgrades.md). Both install routes use the same marketplace identity, so do not register both at once.
+
+## Your workspace and application files
+
+Your selected workspace holds the durable records. Saved roles live under `Jobs/JOB-000123/`; final PDFs are directly accessible under `Applications/<job-and-role>/vNNN/`. The plugin installation contains reusable instructions and helpers, and must stay separate from those private files.
+
+Career Pipeline has no hosted collection service or telemetry. Codex and any connected services still process the information used in their requests under their respective settings and terms. The plugin author receives no automatic copy. Feedback is voluntary and manually shared.
+
+Packet preparation starts only when you explicitly request it. The default packet is a two-page résumé and an enabled one-page cover letter; you can opt out of the cover letter. Documents must pass factual, text, page-count, and visual checks before being marked ready. If Codex's document or PDF capability is unavailable, preparation stops with the missing requirement. The bundled structural PDF verifier needs no extra Python packages, but supports only directly readable catalogs/page trees and classic cross-reference tables; unsupported PDF structures must be regenerated using a standard PDF export.
+
+Career Pipeline does not submit applications, send employer messages, accept invitations, or create calendar events. Optional Linear exports require a separate request, and failed exports do not change your local records.
+
+## Help and updates
+
+If a step fails, save its message and the plugin version, then follow [the beta feedback guide](beta-testing.md). Remove personal details before sharing. Use [the upgrade guide](private-beta-upgrades.md) for later releases; preserve your private workspace when replacing the plugin.
+
+Maintainer build and distribution checks are in [the release guide](releasing.md).

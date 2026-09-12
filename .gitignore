@@ -40,3 +40,7 @@ Career-Workspace/
 .DS_Store
 .idea/
 .vscode/
+
+# Reapply generated-Python exclusions after the source-directory exceptions.
+**/__pycache__/
+*.py[cod]

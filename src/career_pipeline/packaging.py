@@ -23,8 +23,12 @@ _RUNTIME_TREES = (
 )
 _RUNTIME_FILES = (
     "CHANGELOG.md",
+    "LICENSE",
+    "README.md",
+    "docs/beta-testing.md",
     "docs/private-beta-installation.md",
     "docs/private-beta-upgrades.md",
+    "docs/releasing.md",
     "pyproject.toml",
 )
 _SKIP_PARTS = {"__pycache__", ".pytest_cache"}

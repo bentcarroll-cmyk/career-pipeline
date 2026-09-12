@@ -1,0 +1,37 @@
+name: Report a problem
+description: Describe something that did not work during the private beta.
+title: "[Problem] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Everyone with repository access can read this issue. Please use a short
+        description or synthetic example, without résumés, personal career files,
+        account details, or application documents.
+  - type: input
+    id: version
+    attributes:
+      label: Plugin version
+      placeholder: 0.1.1
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Operating system and Codex app version
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What were you trying to do?
+      description: Include the steps that led to the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: What happened, and what did you expect?
+      description: Include only a redacted error message if one appeared.
+    validations:
+      required: true

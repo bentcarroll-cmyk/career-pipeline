@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 — 2026-09-12 (private beta)
+
+- Prepared the first private GitHub distribution with versioned release assets.
+- Added a beginner README, guided installation, runtime checks, and safe update instructions.
+- Documented the macOS beta scope and reject unsupported runtime environments during preflight.
+- Included private-beta usage terms, voluntary feedback forms, and an invitation guide.
+- Packaged the setup, feedback, release, and license documentation with the plugin.
+
 ## 0.1.0 — 2026-09-11 (private beta)
 
 - Added resumable, consent-based onboarding with every connector optional.
