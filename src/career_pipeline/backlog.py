@@ -144,8 +144,6 @@ def _load_packet_progress_locked(
         for record in records:
             if (
                 record.job_id != job_id
-                or record.employer != canonical_by_id[job_id].get("employer")
-                or record.title != canonical_by_id[job_id].get("title")
                 or not isinstance(record.employer, str)
                 or not record.employer
                 or not isinstance(record.title, str)

@@ -14,7 +14,7 @@ from career_pipeline.backlog import (
     mark_not_pursuing,
     selection_from_request,
 )
-from career_pipeline.job_store import create_job, update_job_status
+from career_pipeline.job_store import create_job, reverify_job, update_job_status
 from career_pipeline.packets import (
     ApplicationManifest,
     save_manifest,
@@ -169,6 +169,51 @@ class ReviewBacklogTests(unittest.TestCase):
             self.assertTrue(
                 interviewing["ranking_factors"]["interrupted_packet"]
             )
+
+    def test_packet_history_survives_a_canonical_title_refresh(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            original = synthetic_candidate()
+            job_id = create_job(
+                workspace,
+                original,
+                synthetic_assessment(),
+                posting_markdown="# Original synthetic posting\n",
+                assessment_markdown="# Original synthetic assessment\n",
+                occurred_at="2026-09-11T17:00:00Z",
+            )["job_id"]
+            start_packet(
+                workspace,
+                job_id,
+                synthetic_packet_options(),
+                ApplicationManifest(),
+                occurred_at="2026-09-11T18:00:00Z",
+                explicit_request=True,
+            )
+            refreshed = replace(
+                original,
+                title="Senior Synthetic Operations Lead",
+                verified_at="2026-09-11T19:00:00Z",
+                raw_field_hash="f" * 64,
+            )
+            reverify_job(
+                workspace,
+                job_id,
+                refreshed,
+                synthetic_assessment(),
+                posting_markdown="# Refreshed synthetic posting\n",
+                assessment_markdown="# Refreshed synthetic assessment\n",
+                occurred_at="2026-09-11T19:05:00Z",
+            )
+
+            action = build_actionable_backlog(
+                workspace, as_of="2026-09-11T20:00:00Z"
+            )["actions"][0]
+
+            self.assertEqual(action["job_id"], job_id)
+            self.assertEqual(action["title"], "Senior Synthetic Operations Lead")
+            self.assertEqual(action["packet_stage"], "selected")
+            self.assertTrue(action["ranking_factors"]["interrupted_packet"])
 
     def test_tampered_packet_manifest_cannot_create_an_interrupted_action(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
