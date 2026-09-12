@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -16,6 +18,8 @@ from .job_store import workspace_lock
 
 
 CURRENT_WORKSPACE_SCHEMA = 2
+_BACKUP_COMPLETION_FILE = "backup-complete.json"
+_BACKUP_FORMAT_VERSION = 1
 
 
 class MigrationError(ValueError):
@@ -85,21 +89,113 @@ def plan_migration(
     )
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(str(path), os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _state_files(state: Path) -> dict[Path, Path]:
+    files: dict[Path, Path] = {}
+    for path in sorted(state.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(state)
+        if relative.parts[0] == "backups" or path.name == ".workspace.lock":
+            continue
+        files[relative] = path
+    return files
+
+
+def _inventory(files: Mapping[Path, Path]) -> dict[str, dict[str, object]]:
+    return {
+        relative.as_posix(): {
+            "sha256": _sha256(path),
+            "size": path.stat().st_size,
+        }
+        for relative, path in sorted(files.items())
+    }
+
+
+def _backup_files(backup_dir: Path) -> dict[Path, Path]:
+    return {
+        path.relative_to(backup_dir): path
+        for path in sorted(backup_dir.rglob("*"))
+        if path.is_file()
+        and path.relative_to(backup_dir) != Path(_BACKUP_COMPLETION_FILE)
+    }
+
+
+def _verify_backup(backup_dir: Path) -> dict[Path, Path]:
+    marker = backup_dir / _BACKUP_COMPLETION_FILE
+    try:
+        completion = load_json(marker)
+        if completion.get("schema_version") != _BACKUP_FORMAT_VERSION:
+            raise MigrationError("migration backup completion marker is invalid")
+        expected = completion["files"]
+        if not isinstance(expected, Mapping):
+            raise MigrationError("migration backup completion marker is invalid")
+        files = _backup_files(backup_dir)
+        actual = _inventory(files)
+    except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        raise MigrationError("migration backup is incomplete or invalid") from exc
+    if actual != expected:
+        raise MigrationError("migration backup inventory or hashes do not match")
+    return files
+
+
 def _backup_state(plan: MigrationPlan) -> None:
     if plan.backup_dir.exists():
-        if not (plan.backup_dir / "config.json").is_file():
-            raise MigrationError("existing migration backup is incomplete")
+        _verify_backup(plan.backup_dir)
         return
-    plan.backup_dir.mkdir(parents=True)
-    for source in sorted(plan.workspace.state.rglob("*")):
-        if not source.is_file():
-            continue
-        relative = source.relative_to(plan.workspace.state)
-        if relative.parts[0] == "backups" or source.name == ".workspace.lock":
-            continue
-        destination = plan.backup_dir / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
+    backup_parent = plan.backup_dir.parent
+    backup_parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(
+            prefix=f".{plan.backup_dir.name}.staging-",
+            dir=str(backup_parent),
+        )
+    )
+    try:
+        sources = _state_files(plan.workspace.state)
+        if Path(_BACKUP_COMPLETION_FILE) in sources:
+            raise MigrationError("workspace state uses a reserved backup file name")
+        expected = _inventory(sources)
+        for relative, source in sorted(sources.items()):
+            destination = staging / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+        if _inventory(_state_files(plan.workspace.state)) != expected:
+            raise MigrationError("workspace state changed while creating its backup")
+        if _inventory(_backup_files(staging)) != expected:
+            raise MigrationError("migration backup verification failed")
+        for path in _backup_files(staging).values():
+            with path.open("rb") as stream:
+                os.fsync(stream.fileno())
+        atomic_write_json(
+            staging / _BACKUP_COMPLETION_FILE,
+            {
+                "schema_version": _BACKUP_FORMAT_VERSION,
+                "files": expected,
+            },
+        )
+        _fsync_directory(staging)
+        os.replace(staging, plan.backup_dir)
+        _fsync_directory(backup_parent)
+        _verify_backup(plan.backup_dir)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
 
 
 def _migrated_config(
@@ -144,11 +240,7 @@ def _migrated_config(
 
 def _restore_state(plan: MigrationPlan) -> None:
     state = plan.workspace.state
-    backup_files = {
-        path.relative_to(plan.backup_dir): path
-        for path in plan.backup_dir.rglob("*")
-        if path.is_file()
-    }
+    backup_files = _verify_backup(plan.backup_dir)
     current_files = [
         path
         for path in state.rglob("*")
@@ -181,15 +273,24 @@ def _remove_new_derived_paths(plan: MigrationPlan) -> None:
             pass
 
 
+def _revalidate_plan(plan: MigrationPlan) -> None:
+    current = plan_migration(plan.workspace, plan.target_version)
+    if current != plan:
+        raise MigrationError("migration plan is stale; create a new plan")
+
+
 def apply_migration(
     plan: MigrationPlan,
     confirmation_token: str,
 ) -> MigrationPlan:
     if confirmation_token != plan.confirmation_token:
         raise MigrationError("migration confirmation token does not match the plan")
+    backup_complete = False
     try:
         with workspace_lock(plan.workspace):
+            _revalidate_plan(plan)
             _backup_state(plan)
+            backup_complete = True
             plan.workspace.jobs.mkdir(parents=True, exist_ok=True)
             plan.workspace.indexes.mkdir(parents=True, exist_ok=True)
             next_id = plan.workspace.state / "next-job-id.json"
@@ -200,11 +301,16 @@ def apply_migration(
             atomic_write_json(config_path, _migrated_config(current, plan.workspace))
         rebuild_indexes(plan.workspace)
     except Exception as exc:
+        if not backup_complete:
+            if isinstance(exc, MigrationError):
+                raise
+            raise MigrationError(
+                "migration failed before state mutation; original state is unchanged"
+            ) from exc
         try:
             with workspace_lock(plan.workspace):
-                if plan.backup_dir.exists():
-                    _restore_state(plan)
-            _remove_new_derived_paths(plan)
+                _restore_state(plan)
+                _remove_new_derived_paths(plan)
         except Exception as rollback_exc:
             raise MigrationError(
                 f"migration failed and rollback also failed: {rollback_exc}"
