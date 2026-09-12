@@ -8,12 +8,19 @@ import re
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
-from .atomic import atomic_write_json
+from .atomic import atomic_write_json, load_json
 from .contracts import WorkspacePaths
 from .indexes import load_indexes
 from .job_store import JobStoreError, read_job, update_job_status, workspace_lock
 from .packets import STAGES as PACKET_STAGES
-from .packets import PacketRecord, load_manifest, resume_queue
+from .packets import (
+    InvalidPacketTransition,
+    PacketRecord,
+    load_manifest,
+    resume_queue,
+    validate_manifest_contract,
+    validate_packet_history,
+)
 from .timestamps import TimestampError, parse_instant
 
 
@@ -112,8 +119,16 @@ def _load_packet_progress_locked(
         raise SelectionError("application manifest is invalid")
     try:
         manifest_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        validate_manifest_contract(load_json(manifest_path))
         manifest = load_manifest(manifest_path)
-    except (AttributeError, KeyError, OSError, TypeError, ValueError) as exc:
+    except (
+        AttributeError,
+        InvalidPacketTransition,
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+    ) as exc:
         raise SelectionError("application manifest is invalid") from exc
     canonical_by_id = {str(record["job_id"]): record for record, _ in canonical}
     if manifest.schema_version != 1:
@@ -129,6 +144,8 @@ def _load_packet_progress_locked(
         for record in records:
             if (
                 record.job_id != job_id
+                or record.employer != canonical_by_id[job_id].get("employer")
+                or record.title != canonical_by_id[job_id].get("title")
                 or not isinstance(record.employer, str)
                 or not record.employer
                 or not isinstance(record.title, str)
@@ -142,17 +159,12 @@ def _load_packet_progress_locked(
             if version <= prior_version:
                 raise SelectionError("application manifest packet versions are invalid")
             prior_version = version
-            receipt_names = set(record.receipts)
-            stage_index = PACKET_STAGES.index(record.stage)
-            expected_receipts = set(PACKET_STAGES[: stage_index + 1])
-            if (
-                not receipt_names.issubset(PACKET_STAGES)
-                or (
-                    record.stage != "selected"
-                    and not expected_receipts.issubset(receipt_names)
-                )
-            ):
-                raise SelectionError("application manifest receipt history is invalid")
+            try:
+                validate_packet_history(record)
+            except InvalidPacketTransition as exc:
+                raise SelectionError(
+                    "application manifest receipt history is invalid"
+                ) from exc
             if record.stage == "ready":
                 canonical_versions = canonical_by_id[job_id].get(
                     "application_versions", ()

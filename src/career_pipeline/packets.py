@@ -86,6 +86,24 @@ class ArtifactVerification:
 _UNSAFE = re.compile(r"[^A-Za-z0-9_-]+")
 _UNDERSCORES = re.compile(r"_+")
 _SHA256 = re.compile(r"[a-f0-9]{64}")
+_MANIFEST_KEYS = frozenset({"schema_version", "packets"})
+_MANIFEST_RECORD_REQUIRED_KEYS = frozenset(
+    {
+        "job_id",
+        "employer",
+        "title",
+        "version",
+        "version_dir",
+        "resume_pdf",
+        "working_dir",
+        "stage",
+        "receipts",
+    }
+)
+_MANIFEST_RECORD_KEYS = _MANIFEST_RECORD_REQUIRED_KEYS | {
+    "cover_letter_pdf",
+    "profile_hash",
+}
 
 
 def _safe_component(value: str) -> str:
@@ -97,6 +115,61 @@ def _safe_component(value: str) -> str:
         return cleaned
     suffix = hashlib.sha256(value.encode("utf-8")).hexdigest()[:8]
     return f"{cleaned[:63].rstrip('_-')}_{suffix}"
+
+
+def validate_manifest_contract(raw: Mapping[str, object]) -> None:
+    """Validate the persisted v1 JSON contract without loader coercion."""
+
+    if set(raw) != _MANIFEST_KEYS or type(raw.get("schema_version")) is not int:
+        raise InvalidPacketTransition("application manifest contract is invalid")
+    packets = raw.get("packets")
+    if raw["schema_version"] != 1 or not isinstance(packets, Mapping):
+        raise InvalidPacketTransition("application manifest contract is invalid")
+    for job_id, records in packets.items():
+        if (
+            not isinstance(job_id, str)
+            or re.fullmatch(r"JOB-[0-9]{6}", job_id) is None
+            or not isinstance(records, list)
+        ):
+            raise InvalidPacketTransition("application manifest contract is invalid")
+        for item in records:
+            if (
+                not isinstance(item, Mapping)
+                or not _MANIFEST_RECORD_REQUIRED_KEYS.issubset(item)
+                or not set(item).issubset(_MANIFEST_RECORD_KEYS)
+            ):
+                raise InvalidPacketTransition("application manifest contract is invalid")
+            if (
+                not isinstance(item["job_id"], str)
+                or re.fullmatch(r"JOB-[0-9]{6}", item["job_id"]) is None
+                or not isinstance(item["employer"], str)
+                or not item["employer"]
+                or not isinstance(item["title"], str)
+                or not item["title"]
+                or not isinstance(item["version"], str)
+                or re.fullmatch(r"v[0-9]{3}", item["version"]) is None
+                or any(
+                    not isinstance(item[name], str) or not item[name]
+                    for name in ("version_dir", "resume_pdf", "working_dir")
+                )
+                or not isinstance(item["stage"], str)
+                or item["stage"] not in STAGES
+                or not isinstance(item["receipts"], Mapping)
+            ):
+                raise InvalidPacketTransition("application manifest contract is invalid")
+            cover_letter_pdf = item.get("cover_letter_pdf")
+            profile_hash = item.get("profile_hash")
+            if (
+                cover_letter_pdf is not None
+                and (not isinstance(cover_letter_pdf, str) or not cover_letter_pdf)
+            ) or (profile_hash is not None and not isinstance(profile_hash, str)):
+                raise InvalidPacketTransition("application manifest contract is invalid")
+            receipts = item["receipts"]
+            if any(
+                not isinstance(name, str) or not isinstance(receipt, Mapping)
+                for name, receipt in receipts.items()
+            ):
+                raise InvalidPacketTransition("application manifest contract is invalid")
 
 
 def _latest(manifest: ApplicationManifest, job_id: str) -> PacketRecord | None:
@@ -592,6 +665,84 @@ def _validate_stage_receipt(
             raise InvalidPacketTransition("local artifact readback is not verified")
     elif stage == "ready" and receipt.get("packet_ready") is not True:
         raise InvalidPacketTransition("ready stage needs canonical local delivery")
+
+
+def _validate_selected_receipt(
+    record: PacketRecord,
+    receipt: Mapping[str, object],
+) -> None:
+    if set(receipt) != {"approved_inputs", "packet_options", "role_instructions"}:
+        raise InvalidPacketTransition("selected packet receipt is invalid")
+    approved_inputs = receipt.get("approved_inputs")
+    packet_options = receipt.get("packet_options")
+    role_instructions = receipt.get("role_instructions")
+    if (
+        not isinstance(approved_inputs, Mapping)
+        or set(approved_inputs)
+        != {"profile_hash", "criteria_hash", "writing_preferences_hash"}
+        or any(
+            not isinstance(value, str) or not value
+            for value in approved_inputs.values()
+        )
+        or not isinstance(packet_options, Mapping)
+        or set(packet_options)
+        != {"resume_pages", "cover_letter_enabled", "cover_letter_pages"}
+        or type(packet_options.get("resume_pages")) is not int
+        or packet_options["resume_pages"] < 1
+        or not isinstance(packet_options.get("cover_letter_enabled"), bool)
+        or type(packet_options.get("cover_letter_pages")) is not int
+        or packet_options["cover_letter_pages"]
+        != (1 if packet_options["cover_letter_enabled"] else 0)
+        or not isinstance(role_instructions, str)
+    ):
+        raise InvalidPacketTransition("selected packet receipt is invalid")
+    options = PacketOptions(
+        cover_letter_enabled=packet_options["cover_letter_enabled"],
+        resume_pages=packet_options["resume_pages"],
+        cover_letter_pages=packet_options["cover_letter_pages"],
+        profile_hash=record.profile_hash,
+        criteria_hash=record.criteria_hash,
+        writing_preferences_hash=record.writing_preferences_hash,
+        role_instructions=record.role_instructions,
+    )
+    _validate_packet_options(options)
+    if (
+        dict(receipt) != _selected_receipt(options)
+        or bool(record.cover_letter_pdf) != options.cover_letter_enabled
+    ):
+        raise InvalidPacketTransition("selected packet receipt is invalid")
+
+
+def validate_packet_history(record: PacketRecord) -> None:
+    """Validate persisted progress by replaying packet-stage receipt rules."""
+
+    if record.stage not in STAGES:
+        raise InvalidPacketTransition("packet stage is invalid")
+    stage_index = STAGES.index(record.stage)
+    receipt_names = set(record.receipts)
+    allowed_receipts = set(STAGES[: stage_index + 1])
+    required_progress_receipts = set(STAGES[1 : stage_index + 1])
+    if (
+        not receipt_names.issubset(allowed_receipts)
+        or not required_progress_receipts.issubset(receipt_names)
+        or any(
+            not isinstance(name, str) or not isinstance(receipt, Mapping)
+            for name, receipt in record.receipts.items()
+        )
+    ):
+        raise InvalidPacketTransition("packet receipt history is invalid")
+    selected_receipt = record.receipts.get("selected")
+    if selected_receipt is not None:
+        if not selected_receipt:
+            raise InvalidPacketTransition("selected packet receipt is invalid")
+        _validate_selected_receipt(record, selected_receipt)
+    # Legacy v1 selected records explicitly omit input bindings. The compatibility
+    # loader and stage API support that omission; every later receipt remains required.
+    for stage in STAGES[1 : stage_index + 1]:
+        receipt = record.receipts[stage]
+        if not receipt:
+            raise InvalidPacketTransition("packet stage receipt is empty")
+        _validate_stage_receipt(record, stage, receipt)
 
 
 def resume_queue(manifest: ApplicationManifest) -> tuple[PacketRecord, ...]:

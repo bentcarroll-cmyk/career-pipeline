@@ -15,11 +15,15 @@ from career_pipeline.backlog import (
     selection_from_request,
 )
 from career_pipeline.job_store import create_job, update_job_status
-from career_pipeline.packets import ApplicationManifest, start_packet
+from career_pipeline.packets import (
+    ApplicationManifest,
+    save_manifest,
+    start_packet,
+)
 from career_pipeline.timestamps import parse_instant
 from career_pipeline.workspace import create_workspace
 from tests.unit.test_job_store import synthetic_assessment, synthetic_candidate
-from tests.unit.test_packets import synthetic_packet_options
+from tests.unit.test_packets import advance_to_saved, synthetic_packet_options
 
 
 class ReviewBacklogTests(unittest.TestCase):
@@ -194,6 +198,131 @@ class ReviewBacklogTests(unittest.TestCase):
                 build_actionable_backlog(
                     workspace, as_of="2026-09-11T20:00:00Z"
                 )
+
+    def test_malformed_raw_manifests_fail_closed_without_replacing_the_view(self) -> None:
+        def remove_top_level(value, field):
+            value.pop(field)
+
+        def replace_top_level(value, field, replacement):
+            value[field] = replacement
+
+        def remove_record_field(value, field):
+            next(iter(value["packets"].values()))[0].pop(field)
+
+        def forge_quality_checked(value):
+            record = next(iter(value["packets"].values()))[0]
+            record["stage"] = "quality_checked"
+            record["receipts"] = {
+                "selected": {},
+                "posting_verified": {},
+                "drafted": {},
+                "quality_checked": {},
+            }
+
+        mutations = (
+            ("empty object", lambda value: value.clear()),
+            (
+                "missing schema version",
+                lambda value: remove_top_level(value, "schema_version"),
+            ),
+            ("missing packets", lambda value: remove_top_level(value, "packets")),
+            (
+                "boolean schema version",
+                lambda value: replace_top_level(value, "schema_version", True),
+            ),
+            (
+                "string schema version",
+                lambda value: replace_top_level(value, "schema_version", "1"),
+            ),
+            (
+                "missing record path",
+                lambda value: remove_record_field(value, "resume_pdf"),
+            ),
+            (
+                "missing receipts",
+                lambda value: remove_record_field(value, "receipts"),
+            ),
+            ("forged quality checked receipts", forge_quality_checked),
+        )
+        for label, mutate in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as raw:
+                workspace = create_workspace(Path(raw) / "Synthetic-Career")
+                job_id = create_job(
+                    workspace,
+                    synthetic_candidate(),
+                    synthetic_assessment(),
+                    posting_markdown="# Synthetic posting\n",
+                    assessment_markdown="# Synthetic assessment\n",
+                    occurred_at="2026-09-11T17:00:00Z",
+                )["job_id"]
+                start_packet(
+                    workspace,
+                    job_id,
+                    synthetic_packet_options(),
+                    ApplicationManifest(),
+                    occurred_at="2026-09-11T19:00:00Z",
+                    explicit_request=True,
+                )
+                destination = workspace.indexes / "actionable-backlog.json"
+                baseline = build_actionable_backlog(
+                    workspace, as_of="2026-09-11T20:00:00Z"
+                )
+                baseline_bytes = destination.read_bytes()
+                self.assertTrue(
+                    baseline["actions"][0]["ranking_factors"]["interrupted_packet"]
+                )
+                manifest_path = workspace.state / "application-manifest.json"
+                malformed = json.loads(manifest_path.read_text(encoding="utf-8"))
+                mutate(malformed)
+                manifest_path.write_text(json.dumps(malformed), encoding="utf-8")
+
+                with self.assertRaisesRegex(SelectionError, "manifest"):
+                    build_actionable_backlog(
+                        workspace, as_of="2026-09-11T20:00:00Z"
+                    )
+
+                self.assertEqual(destination.read_bytes(), baseline_bytes)
+
+    def test_valid_later_stage_and_explicit_legacy_selected_manifest_are_accepted(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = create_job(
+                workspace,
+                synthetic_candidate(),
+                synthetic_assessment(),
+                posting_markdown="# Synthetic posting\n",
+                assessment_markdown="# Synthetic assessment\n",
+                occurred_at="2026-09-11T17:00:00Z",
+            )["job_id"]
+            manifest, _ = start_packet(
+                workspace,
+                job_id,
+                synthetic_packet_options(),
+                ApplicationManifest(),
+                occurred_at="2026-09-11T19:00:00Z",
+                explicit_request=True,
+            )
+            manifest = advance_to_saved(manifest, job_id, {"resume": "a" * 64})
+            save_manifest(workspace.state / "application-manifest.json", manifest)
+
+            saved = build_actionable_backlog(
+                workspace, as_of="2026-09-11T20:00:00Z"
+            )["actions"][0]
+            self.assertEqual(saved["packet_stage"], "saved")
+
+            manifest_path = workspace.state / "application-manifest.json"
+            legacy = json.loads(manifest_path.read_text(encoding="utf-8"))
+            legacy_record = legacy["packets"][job_id][0]
+            legacy_record["stage"] = "selected"
+            legacy_record["receipts"] = {}
+            manifest_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+            selected = build_actionable_backlog(
+                workspace, as_of="2026-09-11T20:00:00Z"
+            )["actions"][0]
+            self.assertEqual(selected["packet_stage"], "selected")
 
     def test_timed_and_date_only_deadline_boundaries_preserve_precision(self) -> None:
         as_of = parse_instant("2026-09-11T23:00:00Z")
