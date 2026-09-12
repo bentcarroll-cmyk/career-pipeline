@@ -1,10 +1,17 @@
 import json
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 from career_pipeline.automation_policy import render_automation
-from career_pipeline.job_store import create_job, read_job
+from career_pipeline.job_store import (
+    create_job,
+    read_job,
+    update_job_status,
+    workspace_lock,
+)
 from career_pipeline.reconciliation import (
     LifecycleEvidence,
     reconcile_lifecycle_evidence,
@@ -14,6 +21,194 @@ from tests.unit.test_job_store import synthetic_assessment, synthetic_candidate
 
 
 class LifecycleAutomationTests(unittest.TestCase):
+    def test_commit_rechecks_status_after_concurrent_user_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = create_job(
+                workspace,
+                synthetic_candidate(),
+                synthetic_assessment(),
+                posting_markdown="# Synthetic posting\n",
+                assessment_markdown="# Synthetic assessment\n",
+                occurred_at="2026-09-11T22:00:00Z",
+            )["job_id"]
+            evidence = LifecycleEvidence(
+                "gmail",
+                "synthetic-message-concurrent-user",
+                "2026-09-11T22:05:00Z",
+                "Example Cooperative",
+                "Director of Operations",
+                "SYN-601",
+                "application_confirmation",
+            )
+            injected = False
+
+            @contextmanager
+            def lock_after_user_decision(value):
+                nonlocal injected
+                if not injected:
+                    injected = True
+                    update_job_status(
+                        workspace,
+                        job_id,
+                        "not_pursuing",
+                        occurred_at="2026-09-11T22:06:00Z",
+                        metadata={"reason_code": "synthetic_user_decision"},
+                    )
+                with workspace_lock(value):
+                    yield
+
+            with patch(
+                "career_pipeline.reconciliation.workspace_lock",
+                new=lock_after_user_decision,
+            ):
+                result = reconcile_lifecycle_evidence(
+                    workspace,
+                    evidence,
+                    enabled_sources=("gmail",),
+                )
+
+            self.assertEqual(result.decision.action, "needs_review")
+            self.assertEqual(
+                result.decision.reason,
+                "status_transition_requires_review",
+            )
+            self.assertEqual(read_job(workspace, job_id)["status"], "not_pursuing")
+            receipt = json.loads(result.receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["action"], "needs_review")
+            self.assertEqual(receipt["reason"], "status_transition_requires_review")
+            events = (workspace.jobs / job_id / "events.jsonl").read_text().splitlines()
+            self.assertEqual(
+                [json.loads(line)["status"] for line in events],
+                ["new", "not_pursuing"],
+            )
+
+    def test_concurrent_same_evidence_returns_deduplicated_committed_result(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = create_job(
+                workspace,
+                synthetic_candidate(),
+                synthetic_assessment(),
+                posting_markdown="# Synthetic posting\n",
+                assessment_markdown="# Synthetic assessment\n",
+                occurred_at="2026-09-11T22:00:00Z",
+            )["job_id"]
+            evidence = LifecycleEvidence(
+                "gmail",
+                "synthetic-message-concurrent-same",
+                "2026-09-11T22:05:00Z",
+                "Example Cooperative",
+                "Director of Operations",
+                "SYN-601",
+                "application_confirmation",
+            )
+            injected = False
+            inner = None
+
+            @contextmanager
+            def lock_after_same_evidence(value):
+                nonlocal injected, inner
+                if not injected:
+                    injected = True
+                    inner = reconcile_lifecycle_evidence(
+                        workspace,
+                        evidence,
+                        enabled_sources=("gmail",),
+                    )
+                with workspace_lock(value):
+                    yield
+
+            with patch(
+                "career_pipeline.reconciliation.workspace_lock",
+                new=lock_after_same_evidence,
+            ):
+                outer = reconcile_lifecycle_evidence(
+                    workspace,
+                    evidence,
+                    enabled_sources=("gmail",),
+                )
+
+            self.assertIsNotNone(inner)
+            self.assertEqual(inner.decision.action, "apply_update")
+            self.assertEqual(outer.decision.action, "ignore")
+            self.assertEqual(outer.decision.reason, "evidence_already_seen")
+            self.assertEqual(outer.receipt_path, inner.receipt_path)
+            receipts = list((workspace.runs / "lifecycle").glob("receipt-*.json"))
+            self.assertEqual(len(receipts), 1)
+            events = (workspace.jobs / job_id / "events.jsonl").read_text().splitlines()
+            self.assertEqual(len(events), 2)
+
+    def test_concurrent_different_evidence_receipts_match_committed_outcomes(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = create_job(
+                workspace,
+                synthetic_candidate(),
+                synthetic_assessment(),
+                posting_markdown="# Synthetic posting\n",
+                assessment_markdown="# Synthetic assessment\n",
+                occurred_at="2026-09-11T22:00:00Z",
+            )["job_id"]
+            confirmation = LifecycleEvidence(
+                "gmail",
+                "synthetic-message-concurrent-confirmation",
+                "2026-09-11T22:05:00Z",
+                "Example Cooperative",
+                "Director of Operations",
+                "SYN-601",
+                "application_confirmation",
+            )
+            rejection = LifecycleEvidence(
+                "gmail",
+                "synthetic-message-concurrent-rejection",
+                "2026-09-11T22:06:00Z",
+                "Example Cooperative",
+                "Director of Operations",
+                "SYN-601",
+                "rejection",
+            )
+            injected = False
+            inner = None
+
+            @contextmanager
+            def lock_after_rejection(value):
+                nonlocal injected, inner
+                if not injected:
+                    injected = True
+                    inner = reconcile_lifecycle_evidence(
+                        workspace,
+                        rejection,
+                        enabled_sources=("gmail",),
+                    )
+                with workspace_lock(value):
+                    yield
+
+            with patch(
+                "career_pipeline.reconciliation.workspace_lock",
+                new=lock_after_rejection,
+            ):
+                outer = reconcile_lifecycle_evidence(
+                    workspace,
+                    confirmation,
+                    enabled_sources=("gmail",),
+                )
+
+            self.assertIsNotNone(inner)
+            self.assertEqual(inner.decision.action, "apply_update")
+            self.assertEqual(outer.decision.action, "needs_review")
+            self.assertEqual(read_job(workspace, job_id)["status"], "closed")
+            outer_receipt = json.loads(outer.receipt_path.read_text(encoding="utf-8"))
+            inner_receipt = json.loads(inner.receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(inner_receipt["action"], "apply_update")
+            self.assertEqual(inner_receipt["target_status"], "closed")
+            self.assertEqual(outer_receipt["action"], "needs_review")
+            self.assertEqual(outer_receipt["target_status"], "applied")
+            self.assertEqual(
+                outer_receipt["reason"],
+                "status_transition_requires_review",
+            )
+
     def test_prompt_is_read_only_outside_verified_local_status(self) -> None:
         prompt = render_automation(
             "lifecycle",

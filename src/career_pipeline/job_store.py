@@ -338,7 +338,7 @@ def _canonical_job_dir(workspace: WorkspacePaths, job_id: str) -> Path:
 def read_job(workspace: WorkspacePaths, job_id: str) -> dict[str, object]:
     job_dir = _canonical_job_dir(workspace, job_id)
     if (job_dir / "working" / _PENDING_MUTATION).exists():
-        raise JobStoreError("canonical job has a pending mutation")
+        raise JobStoreError(f"canonical job {job_id} has a pending mutation")
     return _read_valid_job(job_dir, job_id)
 
 
@@ -374,33 +374,10 @@ def _recover_pending_mutation_locked(
         event = journal["event"]
         file_updates = journal.get("file_updates", {})
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        raise JobStoreError("pending canonical mutation is unreadable") from exc
-    if (
-        journal.get("schema_version") != 1
-        or journal.get("job_id") != job_id
-        or not isinstance(updated, Mapping)
-        or not isinstance(event, Mapping)
-        or not isinstance(file_updates, Mapping)
-        or updated.get("job_id") != job_id
-        or event.get("job_id") != job_id
-    ):
-        raise JobStoreError("pending canonical mutation is invalid")
-    if (
-        event.get("schema_version") != 1
-        or not isinstance(event.get("event_type"), str)
-        or not isinstance(event.get("occurred_at"), str)
-        or event.get("status") not in _STATUSES
-        or not isinstance(event.get("metadata"), Mapping)
-        or not set(file_updates).issubset({"posting.md", "assessment.md"})
-        or not all(
-            isinstance(value, str) and value.strip()
-            for value in file_updates.values()
-        )
-    ):
-        raise JobStoreError("pending canonical mutation is invalid")
-    errors = validate_document("job", updated)
-    if errors:
-        raise JobStoreError(f"pending canonical job is invalid: {errors[0].code}")
+        raise JobStoreError(
+            f"pending canonical mutation for {job_id} is unreadable"
+        ) from exc
+    _validate_pending_mutation_payload(job_id, journal)
     event_line = json.dumps(event, sort_keys=True, separators=(",", ":"))
     events_path = job_dir / "events.jsonl"
     prior_events = events_path.read_text(encoding="utf-8")
@@ -429,17 +406,93 @@ def _commit_job_mutation_locked(
     file_updates: Mapping[str, str] | None = None,
 ) -> None:
     pending_path = workspace.jobs / job_id / "working" / _PENDING_MUTATION
-    atomic_write_json(
-        pending_path,
-        {
-            "schema_version": 1,
-            "job_id": job_id,
-            "updated_job": dict(updated),
-            "event": dict(event),
-            "file_updates": dict(file_updates or {}),
-        },
-    )
+    journal = {
+        "schema_version": 1,
+        "job_id": job_id,
+        "updated_job": dict(updated),
+        "event": dict(event),
+        "file_updates": dict(file_updates or {}),
+    }
+    _validate_pending_mutation_payload(job_id, journal)
+    atomic_write_json(pending_path, journal)
     _recover_pending_mutation_locked(workspace, job_id)
+
+
+def _validate_pending_mutation_payload(
+    job_id: str,
+    journal: Mapping[str, object],
+) -> None:
+    """Validate an entire journal without including its private values in errors."""
+
+    try:
+        updated = journal["updated_job"]
+        event = journal["event"]
+        file_updates = journal.get("file_updates", {})
+    except (KeyError, TypeError) as exc:
+        raise JobStoreError(
+            f"pending canonical mutation for {job_id} is invalid: journal_shape"
+        ) from exc
+    allowed_journal_fields = {
+        "schema_version",
+        "job_id",
+        "updated_job",
+        "event",
+        "file_updates",
+    }
+    if (
+        journal.get("schema_version") != 1
+        or journal.get("job_id") != job_id
+        or set(journal) - allowed_journal_fields
+        or not isinstance(updated, Mapping)
+        or not isinstance(event, Mapping)
+        or not isinstance(file_updates, Mapping)
+        or updated.get("job_id") != job_id
+        or event.get("job_id") != job_id
+    ):
+        raise JobStoreError(
+            f"pending canonical mutation for {job_id} is invalid: journal_shape"
+        )
+    allowed_event_fields = {
+        "schema_version",
+        "event_type",
+        "occurred_at",
+        "job_id",
+        "prior_status",
+        "status",
+        "metadata",
+    }
+    prior_status = event.get("prior_status")
+    if (
+        event.get("schema_version") != 1
+        or set(event) - allowed_event_fields
+        or not isinstance(event.get("event_type"), str)
+        or not str(event.get("event_type", "")).strip()
+        or not isinstance(event.get("occurred_at"), str)
+        or not str(event.get("occurred_at", "")).strip()
+        or event.get("status") not in _STATUSES
+        or (prior_status is not None and prior_status not in _STATUSES)
+        or event.get("status") != updated.get("status")
+        or not isinstance(event.get("metadata"), Mapping)
+        or not set(file_updates).issubset({"posting.md", "assessment.md"})
+        or not all(
+            isinstance(value, str) and value.strip()
+            for value in file_updates.values()
+        )
+    ):
+        raise JobStoreError(
+            f"pending canonical mutation for {job_id} is invalid: event_or_files"
+        )
+    errors = validate_document("job", updated)
+    if errors:
+        raise JobStoreError(
+            f"pending canonical mutation for {job_id} is invalid: {errors[0].code}"
+        )
+    try:
+        json.dumps(journal, allow_nan=False, sort_keys=True)
+    except (TypeError, ValueError) as exc:
+        raise JobStoreError(
+            f"pending canonical mutation for {job_id} is invalid: json_value"
+        ) from exc
 
 
 def reverify_job(
@@ -579,45 +632,74 @@ def update_job_status(
     if not occurred_at:
         raise JobStoreError("occurred_at is required")
     with workspace_lock(workspace):
-        current = read_job(workspace, job_id)
-        if require_no_packet_reservation:
-            manifest_path = workspace.state / "application-manifest.json"
-            if manifest_path.exists():
-                try:
-                    manifest = load_json(manifest_path)
-                    packets = manifest["packets"]
-                except (KeyError, TypeError, ValueError) as exc:
-                    raise JobStoreError("application manifest is invalid") from exc
-                if not isinstance(packets, Mapping):
-                    raise JobStoreError("application manifest is invalid")
-                reservations = packets.get(job_id, ())
-                if not isinstance(reservations, (list, tuple)):
-                    raise JobStoreError("application manifest is invalid")
-                if reservations:
-                    return current
-        prior_status = str(current["status"])
-        if prior_status == status:
-            return current
-        if (
-            allowed_prior_statuses is not None
-            and prior_status not in allowed_prior_statuses
-        ):
-            return current
-        updated = dict(current)
-        updated["status"] = status
-        errors = validate_document("job", updated)
-        if errors:
-            raise JobStoreError(f"updated job is invalid: {errors[0].code}")
-        event = _event(
+        return _update_job_status_locked(
+            workspace,
             job_id,
-            "status_changed",
-            occurred_at,
-            prior_status=prior_status,
-            status=status,
+            status,
+            occurred_at=occurred_at,
             metadata=metadata,
+            allowed_prior_statuses=allowed_prior_statuses,
+            require_no_packet_reservation=require_no_packet_reservation,
         )
-        _commit_job_mutation_locked(workspace, job_id, updated, event)
-        return read_job(workspace, job_id)
+
+
+def _update_job_status_locked(
+    workspace: WorkspacePaths,
+    job_id: str,
+    status: str,
+    *,
+    occurred_at: str,
+    metadata: Mapping[str, object] | None = None,
+    allowed_prior_statuses: frozenset[str] | None = None,
+    require_no_packet_reservation: bool = False,
+) -> dict[str, object]:
+    """Commit a constrained status change while the workspace lock is held."""
+
+    if (workspace.state / ".workspace.lock").resolve() not in _HELD_LOCKS:
+        raise WorkspaceLockedError("workspace mutation lock is required")
+    if status not in _STATUSES:
+        raise JobStoreError("unsupported job status")
+    if not occurred_at:
+        raise JobStoreError("occurred_at is required")
+    current = read_job(workspace, job_id)
+    if require_no_packet_reservation:
+        manifest_path = workspace.state / "application-manifest.json"
+        if manifest_path.exists():
+            try:
+                manifest = load_json(manifest_path)
+                packets = manifest["packets"]
+            except (KeyError, TypeError, ValueError) as exc:
+                raise JobStoreError("application manifest is invalid") from exc
+            if not isinstance(packets, Mapping):
+                raise JobStoreError("application manifest is invalid")
+            reservations = packets.get(job_id, ())
+            if not isinstance(reservations, (list, tuple)):
+                raise JobStoreError("application manifest is invalid")
+            if reservations:
+                return current
+    prior_status = str(current["status"])
+    if prior_status == status:
+        return current
+    if (
+        allowed_prior_statuses is not None
+        and prior_status not in allowed_prior_statuses
+    ):
+        return current
+    updated = dict(current)
+    updated["status"] = status
+    errors = validate_document("job", updated)
+    if errors:
+        raise JobStoreError(f"updated job is invalid: {errors[0].code}")
+    event = _event(
+        job_id,
+        "status_changed",
+        occurred_at,
+        prior_status=prior_status,
+        status=status,
+        metadata=metadata,
+    )
+    _commit_job_mutation_locked(workspace, job_id, updated, event)
+    return read_job(workspace, job_id)
 
 
 def record_application_version(

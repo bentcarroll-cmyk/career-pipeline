@@ -12,7 +12,7 @@ from typing import Sequence
 from .atomic import atomic_write_json, load_json
 from .contracts import WorkspacePaths
 from .indexes import load_indexes
-from .job_store import read_job, update_job_status, workspace_lock
+from .job_store import _update_job_status_locked, read_job, workspace_lock
 
 
 @dataclass(frozen=True)
@@ -210,35 +210,49 @@ def reconcile_lifecycle_evidence(
     enabled_sources: Sequence[str],
 ) -> ReconciliationResult:
     receipt_hash = evidence_receipt_hash(evidence)
-    seen = _seen_receipts(workspace)
-    decision = classify_lifecycle_evidence(
-        evidence,
-        _candidates(workspace),
-        tuple(seen),
-        enabled_sources=enabled_sources,
-    )
-    if decision.reason == "evidence_already_seen":
-        return ReconciliationResult(decision, seen[receipt_hash])
-    if decision.reason == "source_not_enabled_for_lifecycle":
-        return ReconciliationResult(decision, None)
-    if decision.action == "apply_update":
-        assert decision.job_id is not None
-        assert decision.target_status is not None
-        update_job_status(
-            workspace,
-            decision.job_id,
-            decision.target_status,
-            occurred_at=evidence.observed_at,
-            metadata={
-                "source_receipt_hash": receipt_hash,
-                "event_class": evidence.event_class,
-            },
-        )
-        load_indexes(workspace)
     receipt_path = (
         workspace.runs / "lifecycle" / f"receipt-{receipt_hash[:20]}.json"
     )
+    rebuild_indexes = False
     with workspace_lock(workspace):
+        seen = _seen_receipts(workspace)
+        decision = classify_lifecycle_evidence(
+            evidence,
+            _candidates(workspace),
+            tuple(seen),
+            enabled_sources=enabled_sources,
+        )
+        if decision.reason == "evidence_already_seen":
+            return ReconciliationResult(decision, seen[receipt_hash])
+        if decision.reason == "source_not_enabled_for_lifecycle":
+            return ReconciliationResult(decision, None)
+        if decision.action == "apply_update":
+            assert decision.job_id is not None
+            assert decision.target_status is not None
+            committed = _update_job_status_locked(
+                workspace,
+                decision.job_id,
+                decision.target_status,
+                occurred_at=evidence.observed_at,
+                metadata={
+                    "source_receipt_hash": receipt_hash,
+                    "event_class": evidence.event_class,
+                },
+                allowed_prior_statuses=frozenset(
+                    _ALLOWED_TRANSITIONS[decision.target_status]
+                ),
+            )
+            if committed["status"] != decision.target_status:
+                decision = LifecycleDecision(
+                    "needs_review",
+                    job_id=decision.job_id,
+                    target_status=decision.target_status,
+                    reason="status_transition_requires_review",
+                )
+            else:
+                rebuild_indexes = True
         if not receipt_path.exists():
             atomic_write_json(receipt_path, minimal_receipt(evidence, decision))
+    if rebuild_indexes:
+        load_indexes(workspace)
     return ReconciliationResult(decision, receipt_path)

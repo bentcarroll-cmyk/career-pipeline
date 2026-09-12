@@ -10,6 +10,7 @@ from unittest.mock import patch
 from career_pipeline.evaluation import EvidenceClaim, JobAssessment
 from career_pipeline.job_store import (
     JobStoreError,
+    _commit_job_mutation_locked,
     create_job,
     read_job,
     update_job_status,
@@ -55,6 +56,83 @@ def assessment() -> JobAssessment:
 
 
 class JobStoreRecoveryTests(unittest.TestCase):
+    def test_invalid_pending_payload_is_rejected_before_journal_publish(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = create_job(
+                workspace,
+                candidate(),
+                assessment(),
+                posting_markdown="# Synthetic posting\n",
+                assessment_markdown="# Synthetic assessment\n",
+                occurred_at="2026-09-11T12:00:00Z",
+            )["job_id"]
+            pending_path = (
+                workspace.jobs / job_id / "working" / "pending-mutation.json"
+            )
+
+            with workspace_lock(workspace):
+                current = read_job(workspace, job_id)
+                invalid_event = {
+                    "schema_version": 1,
+                    "event_type": "status_changed",
+                    "occurred_at": "2026-09-11T12:05:00Z",
+                    "job_id": job_id,
+                    "prior_status": "new",
+                    "status": "unsupported_status",
+                    "metadata": {},
+                }
+                with self.assertRaises(JobStoreError):
+                    _commit_job_mutation_locked(
+                        workspace,
+                        job_id,
+                        current,
+                        invalid_event,
+                    )
+
+            self.assertFalse(pending_path.exists())
+            updated = update_job_status(
+                workspace,
+                job_id,
+                "applied",
+                occurred_at="2026-09-11T12:10:00Z",
+            )
+            self.assertEqual(updated["status"], "applied")
+
+    def test_preexisting_corrupt_journal_fails_closed_with_content_free_job_id(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = create_job(
+                workspace,
+                candidate(),
+                assessment(),
+                posting_markdown="# Synthetic posting\n",
+                assessment_markdown="# Synthetic assessment\n",
+                occurred_at="2026-09-11T12:00:00Z",
+            )["job_id"]
+            pending_path = (
+                workspace.jobs / job_id / "working" / "pending-mutation.json"
+            )
+            private_marker = "synthetic-private-posting-content"
+            pending_path.write_text(
+                '{"private": "' + private_marker + '",',
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(JobStoreError) as read_raised:
+                read_job(workspace, job_id)
+            self.assertIn(job_id, str(read_raised.exception))
+            self.assertNotIn(private_marker, str(read_raised.exception))
+
+            with self.assertRaises(JobStoreError) as raised:
+                with workspace_lock(workspace):
+                    pass
+
+            diagnostic = str(raised.exception)
+            self.assertIn(job_id, diagnostic)
+            self.assertNotIn(private_marker, diagnostic)
+            self.assertTrue(pending_path.is_file())
+
     def test_process_exit_releases_workspace_lock_ownership(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace = create_workspace(Path(raw) / "Synthetic-Career")
