@@ -23,7 +23,11 @@
       }
     },
     "gaps": {"type": "array", "items": {"type": "string"}},
-    "uncertainties": {"type": "array", "items": {"type": "string"}}
+    "uncertainties": {"type": "array", "items": {"type": "string"}},
+    "reason_codes": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    }
   },
   "additionalProperties": false
 }

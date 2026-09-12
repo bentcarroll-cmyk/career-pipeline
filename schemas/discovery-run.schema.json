@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "career-pipeline/discovery-run.schema.json",
+  "title": "Compact discovery run evidence",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "occurred_at",
+    "created_job_ids",
+    "duplicate_keys",
+    "non_match_keys",
+    "meaningful_change_job_ids",
+    "filter_outcomes",
+    "rejections"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "occurred_at": {"type": "string", "minLength": 1},
+    "created_job_ids": {"type": "array", "items": {"$ref": "#/$defs/jobId"}},
+    "duplicate_keys": {"type": "array", "items": {"type": "string"}},
+    "non_match_keys": {"type": "array", "items": {"type": "string"}},
+    "meaningful_change_job_ids": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/jobId"}
+    },
+    "filter_outcomes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["identity", "result", "decisions", "criteria_hash"],
+        "properties": {
+          "identity": {"$ref": "#/$defs/identity"},
+          "result": {"enum": ["pass", "unknown", "confirmed_mismatch"]},
+          "decisions": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/filterDecision"}
+          },
+          "criteria_hash": {"$ref": "#/$defs/nullableHash"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "rejections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "identity",
+          "decision",
+          "disposition",
+          "filter_result",
+          "reason_codes",
+          "source_receipt_reference",
+          "criteria_hash",
+          "assessment_hash"
+        ],
+        "properties": {
+          "identity": {"$ref": "#/$defs/identity"},
+          "decision": {"enum": ["hard_filter_rejection", "semantic_non_match"]},
+          "disposition": {
+            "enum": ["not_assessed", "strong_match", "worth_considering", "non_match"]
+          },
+          "filter_result": {"enum": ["pass", "unknown", "confirmed_mismatch"]},
+          "reason_codes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "source_receipt_reference": {"type": "string", "minLength": 1},
+          "criteria_hash": {"$ref": "#/$defs/nullableHash"},
+          "assessment_hash": {"$ref": "#/$defs/hash"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "$defs": {
+    "jobId": {"type": "string", "pattern": "^JOB-[0-9]{6}$"},
+    "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "nullableHash": {
+      "oneOf": [
+        {"$ref": "#/$defs/hash"},
+        {"type": "null"}
+      ]
+    },
+    "identity": {
+      "type": "object",
+      "required": [
+        "candidate_key",
+        "source",
+        "source_record_id",
+        "requisition_id",
+        "employer",
+        "title"
+      ],
+      "properties": {
+        "candidate_key": {"type": "string", "minLength": 1},
+        "source": {"type": "string", "minLength": 1},
+        "source_record_id": {"type": "string", "minLength": 1},
+        "requisition_id": {"type": ["string", "null"]},
+        "employer": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "filterDecision": {
+      "type": "object",
+      "required": ["criterion_id", "dimension", "result", "reason_code"],
+      "properties": {
+        "criterion_id": {"type": "string", "minLength": 1},
+        "dimension": {"type": "string", "minLength": 1},
+        "result": {"enum": ["pass", "unknown", "confirmed_mismatch"]},
+        "reason_code": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

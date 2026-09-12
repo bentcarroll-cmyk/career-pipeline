@@ -41,7 +41,7 @@ Copy and hash-verify the source resume without modification. Extract a draft chr
 
 ### Profile approval
 
-Create `Profile/Career_Profile.md`, `Profile/Search_Criteria.md`, and `Profile/Writing_Preferences.md` from the templates in `assets/`. Show them for correction. Record current hashes only after explicit approval of the career profile and search criteria. Default to a two-page resume and an enabled one-page cover letter; allow opt-out.
+Create `Profile/Career_Profile.md`, `Profile/Search_Criteria.md`, `Profile/Search_Criteria.json`, and `Profile/Writing_Preferences.md` from the templates in `assets/`. The JSON file must classify compensation, location, work authorization, travel, timing, role, and workplace rules as hard exclusions, preferences, or unknown-tolerant criteria. Require separate explicit user confirmation for every hard exclusion, then bind the JSON file to the approved readable criteria with its SHA-256 hash. Show both criteria representations for correction. Record current hashes only after explicit approval of the career profile and search criteria. Default to a two-page resume and an enabled one-page cover letter; allow opt-out.
 
 ### Schedule and activation
 

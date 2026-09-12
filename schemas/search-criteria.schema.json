@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "career-pipeline/search-criteria.schema.json",
+  "title": "Hash-bound structured search criteria",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "readable_criteria_path",
+    "readable_criteria_sha256",
+    "rules"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "readable_criteria_path": {"const": "Profile/Search_Criteria.md"},
+    "readable_criteria_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "criterion_id",
+          "dimension",
+          "classification",
+          "operator",
+          "values",
+          "reason_code",
+          "user_confirmed"
+        ],
+        "properties": {
+          "criterion_id": {"type": "string", "minLength": 1},
+          "dimension": {
+            "enum": [
+              "compensation",
+              "location",
+              "work_authorization",
+              "travel",
+              "timing",
+              "role",
+              "workplace"
+            ]
+          },
+          "classification": {
+            "enum": ["hard_exclusion", "preference", "unknown_tolerant"]
+          },
+          "operator": {
+            "enum": [
+              "equals",
+              "one_of",
+              "contains_any",
+              "minimum",
+              "maximum",
+              "on_or_after",
+              "on_or_before"
+            ]
+          },
+          "values": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string"}
+          },
+          "reason_code": {"type": "string", "minLength": 1},
+          "user_confirmed": {"type": "boolean"}
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {"classification": {"const": "hard_exclusion"}},
+              "required": ["classification"]
+            },
+            "then": {"properties": {"user_confirmed": {"const": true}}}
+          }
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

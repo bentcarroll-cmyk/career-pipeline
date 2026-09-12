@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 import sys
@@ -7,6 +8,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 from career_pipeline.checkpoints import DiscoveryState, load_discovery_state
+from career_pipeline.criteria import CriteriaRule, SearchCriteria
 from career_pipeline.discovery import ReviewedJob, deliver_reviewed_jobs
 from career_pipeline.evaluation import EvidenceClaim, JobAssessment
 from career_pipeline.job_store import read_job
@@ -61,6 +63,185 @@ def reviewed(number: int, disposition: str = "strong_match") -> ReviewedJob:
 
 
 class DiscoveryDeliveryTests(unittest.TestCase):
+    def test_rejection_receipt_reference_cannot_embed_multiline_source_content(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            item = replace(
+                reviewed(794, "non_match"),
+                source_receipt_reference="# Full source posting\nPrivate details\n",
+            )
+
+            outcome = deliver_reviewed_jobs(
+                workspace,
+                DiscoveryState(),
+                (item,),
+                occurred_at="2026-09-11T16:00:00Z",
+            )
+
+            evidence_text = outcome.run_evidence.read_text(encoding="utf-8")
+            rejection = json.loads(evidence_text)["rejections"][0]
+            self.assertNotIn("Private details", evidence_text)
+            self.assertTrue(
+                rejection["source_receipt_reference"].startswith("source-record:")
+            )
+
+    def test_discovery_cli_loads_hash_bound_structured_criteria(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace_root = Path(raw) / "Synthetic-Career"
+            workspace = create_workspace(workspace_root)
+            readable = workspace.profile / "Search_Criteria.md"
+            readable.write_text("# Approved synthetic criteria\n", encoding="utf-8")
+            (workspace.profile / "Search_Criteria.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "readable_criteria_path": "Profile/Search_Criteria.md",
+                        "readable_criteria_sha256": hashlib.sha256(
+                            readable.read_bytes()
+                        ).hexdigest(),
+                        "rules": [
+                            {
+                                "criterion_id": "location-approved",
+                                "dimension": "location",
+                                "classification": "hard_exclusion",
+                                "operator": "one_of",
+                                "values": ["Remote"],
+                                "reason_code": "location_outside_approved_area",
+                                "user_confirmed": True,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            payload_path = Path(raw) / "reviewed.json"
+            item = reviewed(795)
+            payload_path.write_text(
+                json.dumps({"reviewed": [{
+                    "candidate": asdict(item.candidate),
+                    "assessment": asdict(item.assessment),
+                    "posting_markdown": item.posting_markdown,
+                    "assessment_markdown": item.assessment_markdown,
+                    "source_receipt_reference": "Runs/discovery/sources/public-search-795.json",
+                }]}),
+                encoding="utf-8",
+            )
+            root = Path(__file__).resolve().parents[2]
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(root / "scripts" / "plan_discovery.py"),
+                    "--workspace",
+                    str(workspace_root),
+                    "--reviewed",
+                    str(payload_path),
+                    "--occurred-at",
+                    "2026-09-11T18:05:00Z",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            output = json.loads(result.stdout)
+            evidence = json.loads(
+                (workspace_root / output["run_evidence"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(output["created_job_ids"], [])
+            self.assertEqual(list(workspace.jobs.iterdir()), [])
+            self.assertEqual(
+                evidence["rejections"][0]["decision"], "hard_filter_rejection"
+            )
+
+    def test_hard_filter_rejection_writes_compact_audit_without_allocating_id(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            criteria = SearchCriteria(
+                readable_criteria_path="Profile/Search_Criteria.md",
+                readable_criteria_sha256="b" * 64,
+                rules=(
+                    CriteriaRule(
+                        criterion_id="location-approved",
+                        dimension="location",
+                        classification="hard_exclusion",
+                        operator="one_of",
+                        values=("Remote",),
+                        reason_code="location_outside_approved_area",
+                        user_confirmed=True,
+                    ),
+                ),
+            )
+            item = replace(
+                reviewed(797),
+                assessment=None,
+                source_receipt_reference="Runs/discovery/sources/public-search-797.json",
+            )
+
+            outcome = deliver_reviewed_jobs(
+                workspace,
+                DiscoveryState(),
+                (item,),
+                occurred_at="2026-09-11T18:00:00Z",
+                criteria=criteria,
+            )
+
+            evidence_text = outcome.run_evidence.read_text(encoding="utf-8")
+            evidence = json.loads(evidence_text)
+            self.assertEqual(outcome.created_job_ids, ())
+            self.assertEqual(list(workspace.jobs.iterdir()), [])
+            self.assertEqual(len(evidence["rejections"]), 1)
+            rejection = evidence["rejections"][0]
+            self.assertEqual(rejection["decision"], "hard_filter_rejection")
+            self.assertEqual(rejection["filter_result"], "confirmed_mismatch")
+            self.assertEqual(
+                rejection["reason_codes"], ["location_outside_approved_area"]
+            )
+            self.assertEqual(
+                rejection["source_receipt_reference"],
+                "Runs/discovery/sources/public-search-797.json",
+            )
+            self.assertEqual(rejection["criteria_hash"], "b" * 64)
+            self.assertRegex(rejection["assessment_hash"], r"^[0-9a-f]{64}$")
+            self.assertNotIn("job_id", rejection)
+            self.assertNotIn(item.posting_markdown, evidence_text)
+            self.assertNotIn(item.assessment_markdown, evidence_text)
+
+    def test_semantic_non_match_can_be_explicitly_promoted_on_later_review(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            non_match = replace(
+                reviewed(796, "non_match"),
+                assessment=replace(
+                    reviewed(796, "non_match").assessment,
+                    reason_codes=("responsibilities_do_not_align",),
+                ),
+                source_receipt_reference="Runs/discovery/sources/public-search-796.json",
+            )
+
+            rejected = deliver_reviewed_jobs(
+                workspace,
+                DiscoveryState(),
+                (non_match,),
+                occurred_at="2026-09-11T17:00:00Z",
+            )
+            promoted = deliver_reviewed_jobs(
+                workspace,
+                rejected.state,
+                (reviewed(796),),
+                occurred_at="2026-09-11T18:00:00Z",
+            )
+
+            rejection = json.loads(rejected.run_evidence.read_text())["rejections"][0]
+            self.assertEqual(rejection["decision"], "semantic_non_match")
+            self.assertEqual(
+                rejection["reason_codes"], ["responsibilities_do_not_align"]
+            )
+            self.assertNotIn("job_id", rejection)
+            self.assertEqual(rejected.created_job_ids, ())
+            self.assertEqual(promoted.created_job_ids, ("JOB-000001",))
+
     def test_out_of_order_reverification_cannot_replace_newer_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace = create_workspace(Path(raw) / "Synthetic-Career")

@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "readable_criteria_path": "Profile/Search_Criteria.md",
+  "readable_criteria_sha256": "{{approved_search_criteria_sha256}}",
+  "rules": {{structured_search_criteria_rules_json}}
+}

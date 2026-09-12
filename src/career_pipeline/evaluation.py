@@ -22,6 +22,7 @@ class JobAssessment:
     strengths: tuple[EvidenceClaim, ...]
     gaps: tuple[str, ...]
     uncertainties: tuple[str, ...]
+    reason_codes: tuple[str, ...] = ()
 
 
 def validate_assessment(

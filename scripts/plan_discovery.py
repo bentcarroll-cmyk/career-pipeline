@@ -17,6 +17,7 @@ from career_pipeline.checkpoints import (
     load_discovery_state,
     merge_discovery_state,
 )
+from career_pipeline.criteria import load_search_criteria
 from career_pipeline.discovery import ReviewedJob, deliver_reviewed_jobs
 from career_pipeline.evaluation import EvidenceClaim, JobAssessment
 from career_pipeline.sources.base import CandidateJob
@@ -28,7 +29,7 @@ def _reviewed(path: Path) -> tuple[ReviewedJob, ...]:
     results: list[ReviewedJob] = []
     for item in raw.get("reviewed", ()):
         candidate_raw = item["candidate"]
-        assessment_raw = item["assessment"]
+        assessment_raw = item.get("assessment")
         candidate = CandidateJob(
             **{
                 **candidate_raw,
@@ -36,14 +37,20 @@ def _reviewed(path: Path) -> tuple[ReviewedJob, ...]:
                 "uncertainties": tuple(candidate_raw.get("uncertainties", ())),
             }
         )
-        assessment = JobAssessment(
-            disposition=assessment_raw["disposition"],
-            role_to_profile_fit=assessment_raw["role_to_profile_fit"],
-            strengths=tuple(
-                EvidenceClaim(**claim) for claim in assessment_raw.get("strengths", ())
-            ),
-            gaps=tuple(assessment_raw.get("gaps", ())),
-            uncertainties=tuple(assessment_raw.get("uncertainties", ())),
+        assessment = (
+            JobAssessment(
+                disposition=assessment_raw["disposition"],
+                role_to_profile_fit=assessment_raw["role_to_profile_fit"],
+                strengths=tuple(
+                    EvidenceClaim(**claim)
+                    for claim in assessment_raw.get("strengths", ())
+                ),
+                gaps=tuple(assessment_raw.get("gaps", ())),
+                uncertainties=tuple(assessment_raw.get("uncertainties", ())),
+                reason_codes=tuple(assessment_raw.get("reason_codes", ())),
+            )
+            if isinstance(assessment_raw, dict)
+            else None
         )
         results.append(
             ReviewedJob(
@@ -51,6 +58,8 @@ def _reviewed(path: Path) -> tuple[ReviewedJob, ...]:
                 assessment,
                 item["posting_markdown"],
                 item["assessment_markdown"],
+                criteria_evidence=item.get("criteria_evidence", {}),
+                source_receipt_reference=item.get("source_receipt_reference"),
             )
         )
     return tuple(results)
@@ -81,6 +90,15 @@ def main() -> int:
     parser.add_argument("--occurred-at", required=True)
     args = parser.parse_args()
     workspace = create_workspace(args.workspace)
+    criteria_path = workspace.profile / "Search_Criteria.json"
+    criteria = (
+        load_search_criteria(
+            criteria_path,
+            readable_path=workspace.profile / "Search_Criteria.md",
+        )
+        if criteria_path.is_file()
+        else None
+    )
     state_path = workspace.state / "discovery-state.json"
     state = load_discovery_state(state_path) if state_path.exists() else DiscoveryState()
     outcome = deliver_reviewed_jobs(
@@ -88,6 +106,7 @@ def main() -> int:
         state,
         _reviewed(args.reviewed),
         occurred_at=args.occurred_at,
+        criteria=criteria,
     )
     state = merge_discovery_state(
         workspace,

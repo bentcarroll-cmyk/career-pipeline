@@ -2,9 +2,11 @@
 
 ## Assessment
 
-Evaluate verified responsibilities before title similarity. Record role-to-profile fit, evidence-supported strengths, gaps, uncertainties, compensation evidence, geography, workplace model, travel, recency, posting status, deadline, and a Strong Match, Worth Considering, or non-match disposition.
+Load the hash-bound structured criteria when present. Apply only individually user-confirmed hard exclusions as deterministic filters. A missing or unparseable field is `unknown`, not a confirmed mismatch, and continues to semantic assessment. Preferences and unknown-tolerant rules also continue to semantic assessment.
 
-Never turn an unknown into a favorable assumption. A qualifying assessment requires at least one strength tied to an approved evidence ID. Keep clear non-matches in run evidence only.
+After hard filters pass or remain unknown, evaluate verified responsibilities before title similarity. Record role-to-profile fit, evidence-supported strengths, gaps, uncertainties, compensation evidence, geography, workplace model, travel, recency, posting status, deadline, reason codes, and a Strong Match, Worth Considering, or non-match disposition.
+
+Never turn an unknown into a favorable assumption. A qualifying assessment requires at least one strength tied to an approved evidence ID. Keep clear non-matches in run evidence only. Rejection evidence must stay compact: stable source identity, filter/disposition result, reason codes, minimal source-receipt reference, and criteria/assessment hashes. Do not include full posting text, private profile text, or a canonical job ID. A later qualifying review is the explicit promotion point and performs the normal duplicate check before allocating an ID.
 
 ## Duplicate order
 
