@@ -23,10 +23,13 @@ def render_automation(kind: str, config: Mapping[str, object]) -> str:
     if kind == "discovery":
         return (
             f"Use $discover-jobs with the approved configuration at {config_path}. "
-            "Verify enabled sources and canonical local job folders, repair derived "
-            "indexes when needed, preserve independent source checkpoints, and report "
-            "only new matches, meaningful changes, or actionable failures. Stay quiet "
-            "when nothing actionable changes. "
+            "Attempt every enabled discovery lane independently. When public ATS is "
+            "enabled, rotate through the prioritized employer boards. Record a success "
+            "or actionable failure for each lane, and never treat an unattempted lane "
+            "as completed. Verify canonical local job folders, repair derived indexes "
+            "when needed, preserve independent source checkpoints, and report only new "
+            "matches, meaningful changes, or actionable failures. Stay quiet when "
+            "nothing actionable changes. "
             f"Interpret the cadence in timezone {timezone}."
         )
     if kind == "lifecycle":

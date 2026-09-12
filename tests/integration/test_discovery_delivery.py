@@ -1014,6 +1014,65 @@ class DiscoveryDeliveryTests(unittest.TestCase):
             )
             self.assertEqual(len(list((workspace_root / "Jobs").iterdir())), 1)
 
+    def test_discovery_cli_rejects_missing_enabled_source_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace_root = Path(raw) / "Synthetic-Career"
+            workspace = create_workspace(workspace_root)
+            atomic_write_json(
+                workspace.state / "config.json",
+                {"enabled_sources": ["public_ats", "indeed"]},
+            )
+            item = reviewed(804)
+            payload_path = Path(raw) / "incomplete-source-coverage.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "reviewed": [
+                            {
+                                "candidate": asdict(item.candidate),
+                                "assessment": asdict(item.assessment),
+                                "posting_markdown": item.posting_markdown,
+                                "assessment_markdown": item.assessment_markdown,
+                            }
+                        ],
+                        "source_results": {
+                            "indeed": {
+                                "success": True,
+                                "completed_at": "2026-09-11T18:05:00Z",
+                                "seen_records": ["synthetic-804"],
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            root = Path(__file__).resolve().parents[2]
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(root / "scripts" / "plan_discovery.py"),
+                    "--workspace",
+                    str(workspace_root),
+                    "--reviewed",
+                    str(payload_path),
+                    "--occurred-at",
+                    "2026-09-11T18:05:00Z",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+            error = json.loads(result.stderr)
+            self.assertEqual(error["error"], "source_coverage_incomplete")
+            self.assertEqual(error["missing_enabled_sources"], ["public_ats"])
+            self.assertEqual(list(workspace.jobs.iterdir()), [])
+            self.assertEqual(
+                list((workspace.runs / "discovery").glob("run-*.json")), []
+            )
+
     def test_qualifying_jobs_are_local_and_non_matches_stay_in_run_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace = create_workspace(Path(raw) / "Synthetic-Career")

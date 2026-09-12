@@ -24,6 +24,9 @@ from career_pipeline.sources.base import CandidateJob
 from career_pipeline.workspace import create_workspace
 
 
+_PUBLIC_ATS_SOURCES = frozenset({"public_ats", "greenhouse", "lever", "ashby"})
+
+
 def _reviewed(path: Path) -> tuple[ReviewedJob, ...]:
     raw = json.loads(path.read_text(encoding="utf-8"))
     results: list[ReviewedJob] = []
@@ -85,6 +88,29 @@ def _source_results(path: Path) -> tuple[tuple[str, SourceResult], ...]:
     return tuple(results)
 
 
+def _missing_enabled_sources(workspace, path: Path) -> tuple[str, ...]:
+    config_path = workspace.state / "config.json"
+    if not config_path.is_file():
+        return ()
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    enabled = config.get("enabled_sources", ())
+    if not isinstance(enabled, list):
+        return ()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    raw_results = payload.get("source_results", {})
+    attempted = set(raw_results) if isinstance(raw_results, dict) else set()
+    missing: list[str] = []
+    for source in enabled:
+        if not isinstance(source, str):
+            continue
+        if source == "public_ats":
+            if attempted.isdisjoint(_PUBLIC_ATS_SOURCES):
+                missing.append(source)
+        elif source not in attempted:
+            missing.append(source)
+    return tuple(sorted(missing))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--workspace", required=True, type=Path)
@@ -92,6 +118,18 @@ def main() -> int:
     parser.add_argument("--occurred-at", required=True)
     args = parser.parse_args()
     workspace = create_workspace(args.workspace)
+    missing_sources = _missing_enabled_sources(workspace, args.reviewed)
+    if missing_sources:
+        print(
+            json.dumps(
+                {
+                    "error": "source_coverage_incomplete",
+                    "missing_enabled_sources": missing_sources,
+                }
+            ),
+            file=sys.stderr,
+        )
+        return 3
     criteria_path = workspace.profile / "Search_Criteria.json"
     criteria = (
         load_search_criteria(
