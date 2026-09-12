@@ -27,7 +27,10 @@ class ActivationScenarioTests(unittest.TestCase):
             paths = create_workspace(Path(raw) / "Synthetic-Career")
             profile = paths.profile / "Career_Profile.md"
             criteria = paths.profile / "Search_Criteria.md"
-            profile.write_text("Synthetic approved profile\n", encoding="utf-8")
+            profile.write_text(
+                "Synthetic approved profile\n\nEV-SYN-001: Fictional evidence.\n",
+                encoding="utf-8",
+            )
             criteria.write_text("Synthetic approved criteria\n", encoding="utf-8")
             (paths.profile / "Writing_Preferences.md").write_text(
                 "Synthetic preferences\n", encoding="utf-8"

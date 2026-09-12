@@ -5,7 +5,7 @@ Run readiness after profile approval and schedule selection. A passing report re
 - the standard local directories and state files are writable;
 - the workspace lock, atomic read/write probe, next-ID state, canonical job scan, and index regeneration succeed;
 - the source resume receipt is valid;
-- approved profile and criteria hashes match the current files;
+- approved profile and criteria hashes match the current files, and the profile contains at least one stable `EV-*` evidence identifier;
 - packet defaults specify a two-page resume and zero-or-one-page cover letter;
 - timezone and discovery cadence are valid;
 - every connector has a saved connected, declined, deferred, or unavailable decision and truthful observed capabilities; and

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path
+import re
 import stat
 from typing import Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -28,6 +29,7 @@ _CONFIG_PATHS = {
     "runs": "Runs",
     "state": "State",
 }
+_PROFILE_EVIDENCE_ID = re.compile(r"\bEV-[A-Za-z0-9][A-Za-z0-9_-]*\b")
 
 
 @dataclass(frozen=True)
@@ -107,13 +109,18 @@ def check_readiness(
         if not profile.is_file() or not criteria.is_file() or not preferences.is_file() or len(resumes) != 1:
             failures.append("required_files_missing")
         else:
-            profile_hash = hashlib.sha256(profile.read_bytes()).hexdigest()
+            profile_bytes = profile.read_bytes()
+            profile_hash = hashlib.sha256(profile_bytes).hexdigest()
             criteria_hash = hashlib.sha256(criteria.read_bytes()).hexdigest()
             if (
                 onboarding.profile_hash != profile_hash
                 or onboarding.criteria_hash != criteria_hash
             ):
                 failures.append("approved_files_changed")
+            if _PROFILE_EVIDENCE_ID.search(
+                profile_bytes.decode("utf-8", errors="replace")
+            ) is None:
+                failures.append("profile_evidence_missing")
         receipt_workspace = WorkspacePaths(
             root=root.resolve(),
             profile=(root / "Profile").resolve(),

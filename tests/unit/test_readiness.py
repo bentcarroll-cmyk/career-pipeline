@@ -68,7 +68,10 @@ class ReadinessTests(unittest.TestCase):
         paths = create_workspace(base / "Synthetic-Career")
         profile = paths.profile / "Career_Profile.md"
         criteria = paths.profile / "Search_Criteria.md"
-        profile.write_text("Synthetic approved profile\n", encoding="utf-8")
+        profile.write_text(
+            "Synthetic approved profile\n\nEV-SYN-001: Fictional evidence.\n",
+            encoding="utf-8",
+        )
         criteria.write_text("Synthetic approved criteria\n", encoding="utf-8")
         (paths.profile / "Writing_Preferences.md").write_text(
             "Synthetic writing preferences\n", encoding="utf-8"
@@ -89,7 +92,10 @@ class ReadinessTests(unittest.TestCase):
             paths = create_workspace(Path(raw) / "Synthetic-Career")
             profile = paths.profile / "Career_Profile.md"
             criteria = paths.profile / "Search_Criteria.md"
-            profile.write_text("Synthetic approved profile\n", encoding="utf-8")
+            profile.write_text(
+                "Synthetic approved profile\n\nEV-SYN-001: Fictional evidence.\n",
+                encoding="utf-8",
+            )
             criteria.write_text("Synthetic approved criteria\n", encoding="utf-8")
             (paths.profile / "Writing_Preferences.md").write_text(
                 "Synthetic writing preferences\n", encoding="utf-8"
@@ -131,6 +137,28 @@ class ReadinessTests(unittest.TestCase):
             )
             self.assertIn(
                 "local_store_invalid",
+                check_readiness(config, state).failure_codes,
+            )
+
+    def test_profile_requires_at_least_one_stable_evidence_identifier(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root, config, _state = self._ready_workspace(Path(raw))
+            profile = root / "Profile" / "Career_Profile.md"
+            criteria = root / "Profile" / "Search_Criteria.md"
+            profile.write_text(
+                "Synthetic approved profile without evidence identifiers.\n",
+                encoding="utf-8",
+            )
+            state = self._approved_state(root)
+            state = record_profile_approval(
+                state,
+                hashlib.sha256(profile.read_bytes()).hexdigest(),
+                hashlib.sha256(criteria.read_bytes()).hexdigest(),
+            )
+            save_onboarding_state(root / "State" / "onboarding-state.json", state)
+
+            self.assertIn(
+                "profile_evidence_missing",
                 check_readiness(config, state).failure_codes,
             )
 
