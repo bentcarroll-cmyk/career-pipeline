@@ -380,6 +380,7 @@ def start_packet(
             allowed_prior_statuses=frozenset(
                 {"new", "needs_confirmation", "prepare_application", "packet_ready"}
             ),
+            require_no_packet_reservation=not restart,
         )
     except JobStoreError as exc:
         raise InvalidPacketTransition("packet job must exist in the canonical store") from exc

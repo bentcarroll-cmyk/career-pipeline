@@ -572,6 +572,7 @@ def update_job_status(
     occurred_at: str,
     metadata: Mapping[str, object] | None = None,
     allowed_prior_statuses: frozenset[str] | None = None,
+    require_no_packet_reservation: bool = False,
 ) -> dict[str, object]:
     if status not in _STATUSES:
         raise JobStoreError("unsupported job status")
@@ -579,6 +580,21 @@ def update_job_status(
         raise JobStoreError("occurred_at is required")
     with workspace_lock(workspace):
         current = read_job(workspace, job_id)
+        if require_no_packet_reservation:
+            manifest_path = workspace.state / "application-manifest.json"
+            if manifest_path.exists():
+                try:
+                    manifest = load_json(manifest_path)
+                    packets = manifest["packets"]
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise JobStoreError("application manifest is invalid") from exc
+                if not isinstance(packets, Mapping):
+                    raise JobStoreError("application manifest is invalid")
+                reservations = packets.get(job_id, ())
+                if not isinstance(reservations, (list, tuple)):
+                    raise JobStoreError("application manifest is invalid")
+                if reservations:
+                    return current
         prior_status = str(current["status"])
         if prior_status == status:
             return current

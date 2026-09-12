@@ -496,6 +496,60 @@ class PacketResumptionTests(unittest.TestCase):
             self.assertEqual(nested_result[0].version, "v001")
             self.assertEqual(len(manifest.packets[job_id]), 1)
 
+    def test_interleaved_completed_delivery_is_reconciled_before_start_returns(self) -> None:
+        import career_pipeline.packets as packets_module
+
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = seed_job(workspace)
+            options = synthetic_packet_options()
+            original_update = packets_module.update_job_status
+            interleaved = False
+
+            def deliver_between_reservation_check_and_status(*args, **kwargs):
+                nonlocal interleaved
+                if not interleaved:
+                    interleaved = True
+                    competing, record = start_packet(
+                        workspace,
+                        job_id,
+                        options,
+                        ApplicationManifest(),
+                        occurred_at="2026-09-11T20:05:01Z",
+                        explicit_request=True,
+                    )
+                    write_minimal_pdf(workspace.root / record.resume_pdf, pages=2)
+                    hashes = collect_local_artifacts(workspace, record).hashes
+                    competing = advance_to_saved(competing, job_id, hashes)
+                    complete_local_delivery(
+                        workspace,
+                        competing,
+                        job_id,
+                        occurred_at="2026-09-11T20:05:02Z",
+                    )
+                return original_update(*args, **kwargs)
+
+            with patch.object(
+                packets_module,
+                "update_job_status",
+                side_effect=deliver_between_reservation_check_and_status,
+            ):
+                manifest, record = start_packet(
+                    workspace,
+                    job_id,
+                    options,
+                    ApplicationManifest(),
+                    occurred_at="2026-09-11T20:05:00Z",
+                    explicit_request=True,
+                )
+
+            canonical = read_job(workspace, job_id)
+            self.assertEqual(record.version, "v001")
+            self.assertEqual(record.stage, "ready")
+            self.assertEqual(manifest.packets[job_id][-1].stage, "ready")
+            self.assertEqual(canonical["status"], "packet_ready")
+            self.assertEqual(len(canonical["application_versions"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
