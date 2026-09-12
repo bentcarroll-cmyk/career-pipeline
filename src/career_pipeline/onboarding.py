@@ -135,20 +135,62 @@ def save_onboarding_state(path: Path, state: OnboardingState) -> None:
 
 def load_onboarding_state(path: Path) -> OnboardingState:
     raw = load_json(path)
+    if raw.get("schema_version") != 1:
+        raise ValueError("onboarding state schema version is invalid")
+    stage = raw.get("stage")
+    completed = raw.get("completed", ())
+    raw_connectors = raw.get("connectors", {})
+    raw_receipts = raw.get("receipts", {})
+    if (
+        not isinstance(stage, str)
+        or stage not in STAGES
+        or not isinstance(completed, list)
+        or any(not isinstance(item, str) or item not in STAGES for item in completed)
+        or len(set(completed)) != len(completed)
+        or not isinstance(raw_connectors, Mapping)
+        or not isinstance(raw_receipts, Mapping)
+    ):
+        raise ValueError("onboarding state is invalid")
+    if any(
+        not isinstance(name, str)
+        or not isinstance(value, Mapping)
+        or not isinstance(value.get("decision"), str)
+        or not isinstance(value.get("capabilities", ()), list)
+        for name, value in raw_connectors.items()
+    ):
+        raise ValueError("onboarding state is invalid")
     connectors = {
         name: ConnectorStatus(
-            decision=str(value["decision"]),
+            decision=value["decision"],
             capabilities=tuple(value.get("capabilities", ())),
         )
-        for name, value in raw.get("connectors", {}).items()
+        for name, value in raw_connectors.items()
     }
+    if (
+        any(name not in CONNECTORS for name in connectors)
+        or any(status.decision not in {"connected", "declined", "unavailable"} for status in connectors.values())
+        or any(
+            not isinstance(capability, str)
+            for status in connectors.values()
+            for capability in status.capabilities
+        )
+        or any(
+            not isinstance(name, str) or not isinstance(receipt, Mapping)
+            for name, receipt in raw_receipts.items()
+        )
+        or any(
+            value is not None and not isinstance(value, str)
+            for value in (raw.get("profile_hash"), raw.get("criteria_hash"))
+        )
+    ):
+        raise ValueError("onboarding state is invalid")
     return OnboardingState(
-        stage=str(raw["stage"]),
-        completed=tuple(raw.get("completed", ())),
+        stage=stage,
+        completed=tuple(completed),
         connectors=connectors,
         receipts={
             name: dict(receipt)
-            for name, receipt in raw.get("receipts", {}).items()
+            for name, receipt in raw_receipts.items()
         },
         profile_hash=raw.get("profile_hash"),
         criteria_hash=raw.get("criteria_hash"),

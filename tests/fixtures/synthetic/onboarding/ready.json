@@ -1,8 +1,27 @@
 {
   "config": {
+    "schema_version": 2,
     "workspace_root": "__TEMP_WORKSPACE__",
     "timezone": "America/New_York",
+    "paths": {
+      "profile": "Profile",
+      "sources": "Sources",
+      "jobs": "Jobs",
+      "applications": "Applications",
+      "indexes": "Indexes",
+      "runs": "Runs",
+      "state": "State"
+    },
+    "profile_approved": true,
+    "criteria_approved": true,
+    "connectors": {},
     "enabled_sources": ["public_ats"],
+    "discovery_schedule": {
+      "frequency": "weekday",
+      "weekdays": ["MO", "TU", "WE", "TH", "FR"],
+      "runs_per_day": 2,
+      "timezone": "America/New_York"
+    },
     "packet_defaults": {
       "resume_pages": 2,
       "cover_letter_enabled": true,

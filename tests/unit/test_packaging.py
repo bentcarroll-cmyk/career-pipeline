@@ -5,9 +5,10 @@ import unittest
 import zipfile
 import subprocess
 import sys
+import shutil
 from pathlib import Path
 
-from career_pipeline.packaging import build_plugin_archive
+from career_pipeline.packaging import PackagingError, build_plugin_archive
 from career_pipeline.privacy import scan_tree
 
 
@@ -43,6 +44,22 @@ class PackagingTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(validation.returncode, 0, validation.stdout + validation.stderr)
+
+    def test_archive_rejects_an_obvious_credential_bearing_runtime_member(self) -> None:
+        repository = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as raw:
+            copied = Path(raw) / "repository"
+            shutil.copytree(
+                repository,
+                copied,
+                ignore=shutil.ignore_patterns(".git", "__pycache__", ".pytest_cache"),
+            )
+            (copied / "src" / "career_pipeline" / "credentials.json").write_text(
+                "{}", encoding="utf-8"
+            )
+
+            with self.assertRaises(PackagingError):
+                build_plugin_archive(copied, Path(raw) / "dist")
 
 
 if __name__ == "__main__":

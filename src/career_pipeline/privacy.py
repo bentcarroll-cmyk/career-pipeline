@@ -18,8 +18,9 @@ class Finding:
 
 _TEXT_RULES = {
     "credential-assignment": re.compile(
-        r"(?i)\b(?:api[_-]?key|access[_-]?token|client[_-]?secret|password)"
-        r"\s*[:=]\s*['\"]?[^\s'\"]+"
+        r"(?i)(?:^|[\s,{])['\"]?(?:(?:[a-z0-9]+[_-])*)"
+        r"(?:api[_-]?key|access[_-]?token|client[_-]?secret|password)"
+        r"['\"]?\s*[:=]\s*['\"]?[^\s'\"]+"
     ),
     "email-address": re.compile(
         r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b"
@@ -43,6 +44,10 @@ _USER_DATA_PARTS = {"Applications", "Profile", "Sources", "Runs", "State"}
 _RULE_ALLOWLIST = {
     "src/career_pipeline/privacy.py": {"fixed-user-home", "telemetry-sdk"},
 }
+_SENSITIVE_SUFFIXES = {".key", ".pem", ".p12", ".pfx"}
+_CREDENTIAL_BEARING_NAMES = re.compile(
+    r"(?i)^(?:credentials?|secrets?|tokens?)(?:[._-]|$)"
+)
 
 
 def _scan_text(path: str, text: str) -> list[Finding]:
@@ -59,6 +64,14 @@ def _relative_display(path: Path, root: Path) -> str:
         return path.relative_to(root).as_posix()
     except ValueError:
         return path.name
+
+
+def _sensitive_file_rule(member: PurePosixPath) -> str | None:
+    if member.suffix.lower() in _SENSITIVE_SUFFIXES:
+        return "sensitive-file-type"
+    if _CREDENTIAL_BEARING_NAMES.match(member.name):
+        return "credential-bearing-file"
+    return None
 
 
 def _scan_paths(root: Path) -> Iterable[tuple[str, bytes]]:
@@ -90,6 +103,10 @@ def scan_tree(root: Path) -> list[Finding]:
             continue
         if any(part in _USER_DATA_PARTS for part in member.parts):
             findings.append(Finding(relative, 0, "generated-user-data"))
+            continue
+        file_rule = _sensitive_file_rule(member)
+        if file_rule is not None:
+            findings.append(Finding(relative, 0, file_rule))
             continue
         if b"\x00" in raw:
             continue

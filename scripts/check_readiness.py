@@ -13,9 +13,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from career_pipeline.onboarding import ConnectorStatus, OnboardingState
+from career_pipeline.onboarding import (
+    ConnectorStatus,
+    OnboardingState,
+    save_onboarding_state,
+)
 from career_pipeline.readiness import check_readiness
-from career_pipeline.workspace import create_workspace
+from career_pipeline.workspace import create_workspace, preserve_source_resume
 
 
 def _state_from_raw(raw: dict[str, object]) -> OnboardingState:
@@ -48,13 +52,17 @@ def _run_fixture(
     (paths.profile / "Writing_Preferences.md").write_text(
         "Synthetic writing preferences\n", encoding="utf-8"
     )
-    (paths.sources / "Resume_Original.txt").write_text(
+    source = Path(temp.name) / "Synthetic_Resume.txt"
+    source.write_text(
         "Synthetic source resume\n", encoding="utf-8"
     )
+    preserve_source_resume(source, paths)
     config["workspace_root"] = str(paths.root)
     raw_state["profile_hash"] = hashlib.sha256(profile.read_bytes()).hexdigest()
     raw_state["criteria_hash"] = hashlib.sha256(criteria.read_bytes()).hexdigest()
     state = _state_from_raw(raw_state)
+    (paths.state / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    save_onboarding_state(paths.state / "onboarding-state.json", state)
     return config, state, temp
 
 

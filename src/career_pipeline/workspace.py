@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 from pathlib import Path
 
-from .atomic import atomic_write_json
+from .atomic import atomic_write_json, load_json
 from .contracts import SourceReceipt, WorkspacePaths
 
 
@@ -26,6 +27,8 @@ _DIRECTORIES = (
     "Runs/lifecycle",
     "State",
 )
+_SOURCE_RESUME_RECEIPT = "source-resume-receipt.json"
+_SHA256 = re.compile(r"[a-f0-9]{64}")
 
 
 def _contains(parent: Path, child: Path) -> bool:
@@ -78,6 +81,59 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _source_receipt_mapping(receipt: SourceReceipt, paths: WorkspacePaths) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "source_name": receipt.source_name,
+        "destination": receipt.destination.relative_to(paths.root).as_posix(),
+        "size": receipt.size,
+        "sha256": receipt.sha256,
+    }
+
+
+def save_source_resume_receipt(receipt: SourceReceipt, paths: WorkspacePaths) -> None:
+    """Atomically persist the immutable receipt for the preserved source resume."""
+    atomic_write_json(
+        paths.state / _SOURCE_RESUME_RECEIPT,
+        _source_receipt_mapping(receipt, paths),
+    )
+
+
+def load_source_resume_receipt(paths: WorkspacePaths) -> SourceReceipt:
+    """Load a validated source-resume receipt without trusting arbitrary paths."""
+    raw = load_json(paths.state / _SOURCE_RESUME_RECEIPT)
+    destination = raw.get("destination")
+    size = raw.get("size")
+    sha256 = raw.get("sha256")
+    source_name = raw.get("source_name")
+    if (
+        raw.get("schema_version") != 1
+        or not isinstance(destination, str)
+        or Path(destination).is_absolute()
+        or ".." in Path(destination).parts
+        or not isinstance(size, int)
+        or isinstance(size, bool)
+        or size < 0
+        or not isinstance(sha256, str)
+        or _SHA256.fullmatch(sha256) is None
+        or not isinstance(source_name, str)
+        or not source_name
+    ):
+        raise WorkspaceError("source resume receipt is invalid")
+    destination_path = paths.root / destination
+    resolved = destination_path.resolve()
+    try:
+        resolved.relative_to(paths.sources)
+    except ValueError as exc:
+        raise WorkspaceError("source resume receipt is outside Sources") from exc
+    return SourceReceipt(
+        source_name=source_name,
+        destination=destination_path,
+        size=size,
+        sha256=sha256,
+    )
+
+
 def preserve_source_resume(source: Path, paths: WorkspacePaths) -> SourceReceipt:
     source = source.expanduser().resolve()
     if not source.is_file():
@@ -93,9 +149,16 @@ def preserve_source_resume(source: Path, paths: WorkspacePaths) -> SourceReceipt
         if _sha256(destination) != source_hash:
             destination.unlink(missing_ok=True)
             raise WorkspaceError("preserved resume hash did not match the source")
-    return SourceReceipt(
+    receipt = SourceReceipt(
         source_name=source.name,
         destination=destination,
         size=destination.stat().st_size,
         sha256=source_hash,
     )
+    receipt_path = paths.state / _SOURCE_RESUME_RECEIPT
+    if receipt_path.exists():
+        if load_source_resume_receipt(paths) != receipt:
+            raise WorkspaceError("persisted source resume receipt does not match the source")
+    else:
+        save_source_resume_receipt(receipt, paths)
+    return receipt

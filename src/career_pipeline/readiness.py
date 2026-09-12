@@ -6,15 +6,28 @@ from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path
+import stat
 from typing import Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .atomic import atomic_write_json, load_json
-from .capabilities import CONNECTORS, PUBLIC_DISCOVERY_SOURCES
+from .capabilities import CONNECTORS, DISCOVERY_ACTIONS, PUBLIC_DISCOVERY_SOURCES
 from .contracts import WorkspacePaths
 from .indexes import load_indexes
 from .job_store import workspace_lock
-from .onboarding import OnboardingState
+from .onboarding import OnboardingState, load_onboarding_state
+from .workspace import WorkspaceError, load_source_resume_receipt
+
+
+_CONFIG_PATHS = {
+    "profile": "Profile",
+    "sources": "Sources",
+    "jobs": "Jobs",
+    "applications": "Applications",
+    "indexes": "Indexes",
+    "runs": "Runs",
+    "state": "State",
+}
 
 
 @dataclass(frozen=True)
@@ -26,16 +39,53 @@ class ReadinessReport:
         return not self.failure_codes
 
 
+def _persisted_config_is_valid(config: Mapping[str, object], root: Path) -> bool:
+    workspace_root = config.get("workspace_root")
+    paths = config.get("paths")
+    return (
+        config.get("schema_version") == 2
+        and isinstance(workspace_root, str)
+        and Path(workspace_root).resolve() == root.resolve()
+        and isinstance(config.get("timezone"), str)
+        and bool(config.get("timezone"))
+        and isinstance(paths, Mapping)
+        and all(paths.get(name) == relative for name, relative in _CONFIG_PATHS.items())
+        and config.get("profile_approved") is True
+        and config.get("criteria_approved") is True
+        and isinstance(config.get("connectors"), Mapping)
+    )
+
+
 def check_readiness(
     config: Mapping[str, object],
     onboarding: OnboardingState,
 ) -> ReadinessReport:
     failures: list[str] = []
     root_value = config.get("workspace_root")
+    persisted_config: Mapping[str, object] | None = None
+    persisted_onboarding: OnboardingState | None = None
     if not isinstance(root_value, str) or not Path(root_value).is_dir():
         failures.append("workspace_unavailable")
     else:
         root = Path(root_value)
+        try:
+            persisted_config = load_json(root / "State" / "config.json")
+        except (OSError, ValueError):
+            failures.append("persisted_config_invalid")
+        try:
+            persisted_onboarding = load_onboarding_state(root / "State" / "onboarding-state.json")
+        except (OSError, ValueError, KeyError, TypeError):
+            failures.append("persisted_onboarding_invalid")
+        if persisted_config is not None:
+            if not _persisted_config_is_valid(persisted_config, root):
+                failures.append("persisted_config_invalid")
+            if persisted_config != config:
+                failures.append("persisted_config_mismatch")
+            config = persisted_config
+        if persisted_onboarding is not None:
+            if persisted_onboarding != onboarding:
+                failures.append("persisted_onboarding_mismatch")
+            onboarding = persisted_onboarding
         for relative in (
             "Profile",
             "Sources",
@@ -64,6 +114,31 @@ def check_readiness(
                 or onboarding.criteria_hash != criteria_hash
             ):
                 failures.append("approved_files_changed")
+        receipt_workspace = WorkspacePaths(
+            root=root.resolve(),
+            profile=(root / "Profile").resolve(),
+            sources=(root / "Sources").resolve(),
+            jobs=(root / "Jobs").resolve(),
+            applications=(root / "Applications").resolve(),
+            indexes=(root / "Indexes").resolve(),
+            runs=(root / "Runs").resolve(),
+            state=(root / "State").resolve(),
+        )
+        receipt_path = receipt_workspace.state / "source-resume-receipt.json"
+        if not receipt_path.is_file():
+            failures.append("resume_receipt_missing")
+        else:
+            try:
+                receipt = load_source_resume_receipt(receipt_workspace)
+                resume_stat = receipt.destination.lstat()
+                if receipt.destination.is_symlink() or not stat.S_ISREG(resume_stat.st_mode):
+                    failures.append("resume_not_regular_file")
+                elif resume_stat.st_size != receipt.size:
+                    failures.append("resume_size_mismatch")
+                elif hashlib.sha256(receipt.destination.read_bytes()).hexdigest() != receipt.sha256:
+                    failures.append("resume_hash_mismatch")
+            except (OSError, ValueError, WorkspaceError):
+                failures.append("resume_receipt_invalid")
         workspace = WorkspacePaths(
             root=root.resolve(),
             profile=(root / "Profile").resolve(),
@@ -104,6 +179,26 @@ def check_readiness(
     except ZoneInfoNotFoundError:
         failures.append("timezone_invalid")
 
+    schedule = config.get("discovery_schedule")
+    if not isinstance(schedule, Mapping):
+        failures.append("discovery_schedule_invalid")
+    else:
+        weekdays = schedule.get("weekdays")
+        runs_per_day = schedule.get("runs_per_day")
+        if (
+            schedule.get("frequency") not in {"weekday", "daily", "weekly", "custom"}
+            or not isinstance(weekdays, list)
+            or not weekdays
+            or any(day not in {"MO", "TU", "WE", "TH", "FR", "SA", "SU"} for day in weekdays)
+            or len(set(weekdays)) != len(weekdays)
+            or not isinstance(runs_per_day, int)
+            or isinstance(runs_per_day, bool)
+            or not 1 <= runs_per_day <= 24
+        ):
+            failures.append("discovery_schedule_invalid")
+        if schedule.get("timezone") != timezone:
+            failures.append("discovery_schedule_timezone_mismatch")
+
     if not onboarding.profile_hash or not onboarding.criteria_hash:
         failures.append("profile_not_approved")
     if any(name not in onboarding.connectors for name in CONNECTORS):
@@ -116,7 +211,11 @@ def check_readiness(
             or (
                 source in onboarding.connectors
                 and onboarding.connectors[source].decision == "connected"
-                and bool(onboarding.connectors[source].capabilities)
+                and bool(
+                    set(onboarding.connectors[source].capabilities).intersection(
+                        DISCOVERY_ACTIONS.get(source, frozenset())
+                    )
+                )
             )
         )
         for source in sources

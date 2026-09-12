@@ -15,9 +15,10 @@ from career_pipeline.onboarding import (
     OnboardingState,
     record_connector_decision,
     record_profile_approval,
+    save_onboarding_state,
 )
 from career_pipeline.readiness import check_readiness
-from career_pipeline.workspace import create_workspace
+from career_pipeline.workspace import create_workspace, preserve_source_resume
 
 
 class ActivationScenarioTests(unittest.TestCase):
@@ -31,9 +32,11 @@ class ActivationScenarioTests(unittest.TestCase):
             (paths.profile / "Writing_Preferences.md").write_text(
                 "Synthetic preferences\n", encoding="utf-8"
             )
-            (paths.sources / "Resume_Original.txt").write_text(
+            source = Path(raw) / "Synthetic_Resume.txt"
+            source.write_text(
                 "Synthetic source resume\n", encoding="utf-8"
             )
+            preserve_source_resume(source, paths)
             state = OnboardingState.at("readiness")
             for connector in CONNECTORS:
                 state = record_connector_decision(state, connector, "declined", ())
@@ -43,15 +46,31 @@ class ActivationScenarioTests(unittest.TestCase):
                 hashlib.sha256(criteria.read_bytes()).hexdigest(),
             )
             config = {
+                "schema_version": 2,
                 "workspace_root": str(paths.root),
                 "timezone": "America/New_York",
+                "paths": {
+                    "profile": "Profile",
+                    "sources": "Sources",
+                    "jobs": "Jobs",
+                    "applications": "Applications",
+                    "indexes": "Indexes",
+                    "runs": "Runs",
+                    "state": "State",
+                },
+                "profile_approved": True,
+                "criteria_approved": True,
+                "connectors": {},
                 "enabled_sources": ["public_ats"],
+                "discovery_schedule": default_discovery_schedule("America/New_York"),
                 "packet_defaults": {
                     "resume_pages": 2,
                     "cover_letter_enabled": True,
                     "cover_letter_pages": 1,
                 },
             }
+            (paths.state / "config.json").write_text(json.dumps(config), encoding="utf-8")
+            save_onboarding_state(paths.state / "onboarding-state.json", state)
             self.assertTrue(check_readiness(config, state).ready)
 
     def test_default_schedule_is_twice_each_weekday_in_user_timezone(self) -> None:

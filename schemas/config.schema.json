@@ -11,6 +11,8 @@
     "profile_approved",
     "criteria_approved",
     "connectors",
+    "enabled_sources",
+    "discovery_schedule",
     "packet_defaults"
   ],
   "properties": {
@@ -34,6 +36,22 @@
     "profile_approved": {"type": "boolean"},
     "criteria_approved": {"type": "boolean"},
     "connectors": {"type": "object"},
+    "enabled_sources": {
+      "type": "array",
+      "items": {"type": "string"},
+      "minItems": 1
+    },
+    "discovery_schedule": {
+      "type": "object",
+      "required": ["frequency", "weekdays", "runs_per_day", "timezone"],
+      "properties": {
+        "frequency": {"enum": ["weekday", "daily", "weekly", "custom"]},
+        "weekdays": {"type": "array", "items": {"enum": ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]}, "minItems": 1, "uniqueItems": true},
+        "runs_per_day": {"type": "integer", "minimum": 1, "maximum": 24},
+        "timezone": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
     "packet_defaults": {
       "type": "object",
       "required": ["resume_pages", "cover_letter_enabled", "cover_letter_pages"]
