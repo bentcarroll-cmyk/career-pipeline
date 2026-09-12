@@ -16,7 +16,7 @@ This readable document is paired with `Profile/Search_Criteria.json`. The struct
 
 {{compensation_requirements_and_uncertainty}}
 
-State which items are hard exclusions, preferences, or unknown-tolerant. Missing compensation evidence is unknown unless the user explicitly chooses a rule that treats it otherwise.
+State which items are hard exclusions, preferences, or unknown-tolerant. Missing or non-comparable compensation evidence remains unknown.
 
 ## Location and work model
 
@@ -34,4 +34,4 @@ State which items are hard exclusions, preferences, or unknown-tolerant. Missing
 
 {{qualification_and_exclusion_rules}}
 
-Every hard exclusion must be individually confirmed by the user before it is written to the structured criteria. Preferences and unknown evidence remain visible for semantic assessment.
+Every hard exclusion must be individually confirmed by the user before it is written to the structured criteria. Numeric rules must state comparable bounds, units, currency, and pay period where applicable. Timing rules must identify their subject, such as application deadline or required start date. Preferences and unknown evidence remain visible for semantic assessment.

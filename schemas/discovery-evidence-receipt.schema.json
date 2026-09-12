@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "career-pipeline/discovery-evidence-receipt.schema.json",
+  "title": "Immutable compact discovery rejection evidence",
+  "type": "object",
+  "required": [
+    "schema_version", "identity", "source_snapshot", "responsibility_evidence", "normalized_evidence",
+    "decision", "filter_result", "reason_codes", "rationale_summary",
+    "criteria_hash", "readable_criteria_sha256", "assessment_hash"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "identity": {
+      "type": "object",
+      "required": ["candidate_key", "source", "source_record_id", "requisition_id", "employer", "title", "posting_url", "application_url"],
+      "properties": {
+        "candidate_key": {"type": "string", "minLength": 1},
+        "source": {"type": "string", "minLength": 1},
+        "source_record_id": {"type": "string", "minLength": 1},
+        "requisition_id": {"type": ["string", "null"]},
+        "employer": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1},
+        "posting_url": {"type": "string", "minLength": 1},
+        "application_url": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "source_snapshot": {
+      "type": "object",
+      "required": ["verified_at", "verification_status", "raw_field_hash"],
+      "properties": {
+        "verified_at": {"type": "string", "minLength": 1},
+        "verification_status": {"type": "string", "minLength": 1},
+        "raw_field_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "responsibility_evidence": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {"type": "string", "minLength": 1, "maxLength": 160}
+    },
+    "normalized_evidence": {
+      "type": "array",
+      "items": {"$ref": "normalized-criteria-evidence.schema.json"}
+    },
+    "decision": {"enum": ["hard_filter_rejection", "semantic_non_match"]},
+    "filter_result": {"enum": ["pass", "unknown", "confirmed_mismatch"]},
+    "reason_codes": {
+      "type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$"}
+    },
+    "rationale_summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 280,
+      "pattern": "^(?:hard_filter_rejection|semantic_non_match):[a-z][a-z0-9_]{2,63}(?:,[a-z][a-z0-9_]{2,63}){0,2}$"
+    },
+    "criteria_hash": {"oneOf": [{"type": "string", "pattern": "^[0-9a-f]{64}$"}, {"type": "null"}]},
+    "readable_criteria_sha256": {"oneOf": [{"type": "string", "pattern": "^[0-9a-f]{64}$"}, {"type": "null"}]},
+    "assessment_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "upstream_source_receipt_reference": {
+      "type": "string",
+      "pattern": "^Runs/discovery/sources/receipt-[0-9a-f]{64}\\.json$"
+    }
+  },
+  "additionalProperties": false
+}

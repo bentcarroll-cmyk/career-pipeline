@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "career-pipeline/normalized-criteria-evidence.schema.json",
+  "title": "Source-bound normalized criterion evidence",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["dimension", "subject", "status", "value_type", "provenance", "certainty", "source", "source_record_id", "source_field_hash", "text_value"],
+      "properties": {
+        "dimension": {"enum": ["location", "work_authorization", "role", "workplace"]},
+        "subject": {"enum": ["job_location", "required_authorization", "job_title", "workplace_model"]},
+        "status": {"const": "known"}, "value_type": {"const": "text"},
+        "provenance": {"enum": ["normalized_candidate", "source_receipt"]},
+        "certainty": {"const": "verified"},
+        "source": {"type": "string", "minLength": 1},
+        "source_record_id": {"type": "string", "minLength": 1},
+        "source_field_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "text_value": {"type": "string", "minLength": 1, "maxLength": 280}
+      },
+      "allOf": [{
+        "oneOf": [
+          {"properties": {"dimension": {"const": "location"}, "subject": {"const": "job_location"}}},
+          {"properties": {"dimension": {"const": "work_authorization"}, "subject": {"const": "required_authorization"}}},
+          {"properties": {"dimension": {"const": "role"}, "subject": {"const": "job_title"}}},
+          {"properties": {"dimension": {"const": "workplace"}, "subject": {"const": "workplace_model"}}}
+        ]
+      }],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["dimension", "subject", "status", "value_type", "provenance", "certainty", "source", "source_record_id", "source_field_hash", "lower_bound", "upper_bound", "unit", "currency", "pay_period"],
+      "properties": {
+        "dimension": {"const": "compensation"}, "subject": {"const": "base_compensation"},
+        "status": {"const": "known"}, "value_type": {"const": "number"},
+        "provenance": {"enum": ["normalized_candidate", "source_receipt"]}, "certainty": {"const": "verified"},
+        "source": {"type": "string", "minLength": 1}, "source_record_id": {"type": "string", "minLength": 1},
+        "source_field_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "lower_bound": {"type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+)?$"},
+        "upper_bound": {"type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+)?$"},
+        "unit": {"const": "money"}, "currency": {"enum": ["USD", "EUR", "GBP", "CAD"]},
+        "pay_period": {"enum": ["year", "month", "week", "hour"]}
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["dimension", "subject", "status", "value_type", "provenance", "certainty", "source", "source_record_id", "source_field_hash", "lower_bound", "upper_bound", "unit"],
+      "properties": {
+        "dimension": {"const": "travel"}, "subject": {"const": "travel_percentage"},
+        "status": {"const": "known"}, "value_type": {"const": "number"},
+        "provenance": {"enum": ["normalized_candidate", "source_receipt"]}, "certainty": {"const": "verified"},
+        "source": {"type": "string", "minLength": 1}, "source_record_id": {"type": "string", "minLength": 1},
+        "source_field_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "lower_bound": {"type": "string", "pattern": "^(?:100(?:\\.0+)?|[0-9]{1,2}(?:\\.[0-9]+)?)$"},
+        "upper_bound": {"type": "string", "pattern": "^(?:100(?:\\.0+)?|[0-9]{1,2}(?:\\.[0-9]+)?)$"},
+        "unit": {"const": "percent"}
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["dimension", "subject", "status", "value_type", "provenance", "certainty", "source", "source_record_id", "source_field_hash", "lower_bound", "upper_bound"],
+      "properties": {
+        "dimension": {"const": "timing"}, "subject": {"enum": ["application_deadline", "required_start_date"]},
+        "status": {"const": "known"}, "value_type": {"const": "date"},
+        "provenance": {"enum": ["normalized_candidate", "source_receipt"]}, "certainty": {"const": "verified"},
+        "source": {"type": "string", "minLength": 1}, "source_record_id": {"type": "string", "minLength": 1},
+        "source_field_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "lower_bound": {"type": "string", "format": "date"}, "upper_bound": {"type": "string", "format": "date"}
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["dimension", "subject", "status", "value_type", "provenance", "certainty", "source", "source_record_id", "source_field_hash"],
+      "properties": {
+        "dimension": {"enum": ["compensation", "location", "work_authorization", "travel", "timing", "role", "workplace"]},
+        "subject": {"enum": ["base_compensation", "job_location", "required_authorization", "travel_percentage", "application_deadline", "required_start_date", "job_title", "workplace_model"]},
+        "status": {"enum": ["unknown", "conflicting"]}, "value_type": {"enum": ["text", "number", "date"]},
+        "provenance": {"enum": ["normalized_candidate", "source_receipt"]}, "certainty": {"enum": ["verified", "unverified"]},
+        "source": {"type": "string", "minLength": 1}, "source_record_id": {"type": "string", "minLength": 1},
+        "source_field_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "allOf": [{
+        "oneOf": [
+          {"properties": {"dimension": {"const": "compensation"}, "subject": {"const": "base_compensation"}, "value_type": {"const": "number"}}},
+          {"properties": {"dimension": {"const": "location"}, "subject": {"const": "job_location"}, "value_type": {"const": "text"}}},
+          {"properties": {"dimension": {"const": "work_authorization"}, "subject": {"const": "required_authorization"}, "value_type": {"const": "text"}}},
+          {"properties": {"dimension": {"const": "travel"}, "subject": {"const": "travel_percentage"}, "value_type": {"const": "number"}}},
+          {"properties": {"dimension": {"const": "timing"}, "subject": {"enum": ["application_deadline", "required_start_date"]}, "value_type": {"const": "date"}}},
+          {"properties": {"dimension": {"const": "role"}, "subject": {"const": "job_title"}, "value_type": {"const": "text"}}},
+          {"properties": {"dimension": {"const": "workplace"}, "subject": {"const": "workplace_model"}, "value_type": {"const": "text"}}}
+        ]
+      }],
+      "additionalProperties": false
+    }
+  ]
+}

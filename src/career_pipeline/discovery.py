@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from .atomic import atomic_write_json
+from .atomic import atomic_write_json, load_json
 from .checkpoints import DiscoveryState, stable_review_batch
-from .criteria import HardFilterOutcome, SearchCriteria, evaluate_hard_filters
+from .criteria import (
+    HardFilterOutcome,
+    SearchCriteria,
+    evaluate_hard_filters,
+    evidence_to_mapping,
+    resolve_workspace_criteria,
+)
 from .contracts import WorkspacePaths
 from .dedupe import candidate_key
 from .evaluation import JobAssessment
@@ -30,7 +37,7 @@ class ReviewedJob:
     assessment: JobAssessment | None
     posting_markdown: str
     assessment_markdown: str
-    criteria_evidence: Mapping[str, object] = field(default_factory=dict)
+    criteria_evidence: object = field(default_factory=tuple)
     source_receipt_reference: str | None = None
 
 
@@ -47,13 +54,11 @@ class DiscoveryOutcome:
 def _run_evidence_path(
     workspace: WorkspacePaths,
     occurred_at: str,
-    reviewed: Sequence[ReviewedJob],
+    decision_identity: object,
 ) -> Path:
     digest = hashlib.sha256()
     digest.update(occurred_at.encode("utf-8"))
-    for item in reviewed:
-        digest.update(candidate_key(item.candidate).encode("utf-8"))
-        digest.update(b"\n")
+    digest.update(_canonical_json(decision_identity))
     return workspace.runs / "discovery" / f"run-{digest.hexdigest()[:16]}.json"
 
 
@@ -67,6 +72,7 @@ def deliver_reviewed_jobs(
 ) -> DiscoveryOutcome:
     if not occurred_at:
         raise ValueError("occurred_at is required")
+    criteria = resolve_workspace_criteria(workspace, criteria)
     baseline = load_indexes(workspace)
     raw_identities = baseline.deduplication.get("identities", {})
     identities = raw_identities if isinstance(raw_identities, dict) else {}
@@ -95,6 +101,9 @@ def deliver_reviewed_jobs(
                 "result": filter_outcome.result,
                 "decisions": [asdict(decision) for decision in filter_outcome.decisions],
                 "criteria_hash": (
+                    criteria.structured_sha256 if criteria is not None else None
+                ),
+                "readable_criteria_sha256": (
                     criteria.readable_criteria_sha256 if criteria is not None else None
                 ),
             }
@@ -107,19 +116,21 @@ def deliver_reviewed_jobs(
             and item.assessment.disposition == "non_match"
         ):
             non_matches.append(key)
-            rejections.append(
-                _rejection_evidence(
+            rejection = _rejection_evidence(
                     item,
                     identity,
                     filter_outcome,
-                    criteria=(
-                        criteria.readable_criteria_sha256
-                        if criteria is not None
-                        else None
-                    ),
+                    criteria=criteria,
                     hard_rejected=hard_rejected,
                 )
+            rejection["evidence_receipt_reference"] = _persist_rejection_receipt(
+                workspace,
+                item,
+                rejection,
+                filter_outcome,
             )
+            rejection["source_receipt_reference"] = rejection["evidence_receipt_reference"]
+            rejections.append(rejection)
             continue
         if key in identities:
             duplicates.append(key)
@@ -174,7 +185,11 @@ def deliver_reviewed_jobs(
         stable_review_batch=stable_review_batch(tuple(created)),
         canonical_jobs=canonical_jobs,
     )
-    evidence_path = _run_evidence_path(workspace, occurred_at, reviewed)
+    evidence_path = _run_evidence_path(
+        workspace,
+        occurred_at,
+        {"filter_outcomes": filter_outcomes, "rejections": rejections},
+    )
     with workspace_lock(workspace):
         atomic_write_json(
             evidence_path,
@@ -210,39 +225,30 @@ def _compact_identity(candidate: CandidateJob, key: str) -> dict[str, object]:
     }
 
 
+_REASON_CODE = re.compile(r"[a-z][a-z0-9_]{2,63}")
+_RECEIPT_REFERENCE = re.compile(
+    r"Runs/discovery/sources/receipt-([0-9a-f]{64})\.json"
+)
+
+
+def _canonical_json(value: object) -> bytes:
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+
+
 def _assessment_hash(
     assessment: JobAssessment | None,
     filter_outcome: HardFilterOutcome,
+    criteria: SearchCriteria | None,
 ) -> str:
-    payload = json.dumps(
-        (
-            asdict(assessment)
-            if assessment is not None
-            else {
-                "filter_result": filter_outcome.result,
-                "decisions": [asdict(decision) for decision in filter_outcome.decisions],
-            }
-        ),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
-def _source_receipt_reference(item: ReviewedJob) -> str:
-    if (
-        isinstance(item.source_receipt_reference, str)
-        and 0 < len(item.source_receipt_reference) <= 512
-        and "\n" not in item.source_receipt_reference
-        and "\r" not in item.source_receipt_reference
-    ):
-        return item.source_receipt_reference
-    candidate = item.candidate
-    return (
-        f"source-record:{candidate.source}:{candidate.source_record_id}:"
-        f"{candidate.raw_field_hash}"
-    )
+    payload = {
+        "assessment": asdict(assessment) if assessment is not None else None,
+        "filter_result": filter_outcome.result,
+        "filter_decisions": [asdict(decision) for decision in filter_outcome.decisions],
+        "criteria_hash": criteria.structured_sha256 if criteria is not None else None,
+    }
+    return hashlib.sha256(_canonical_json(payload)).hexdigest()
 
 
 def _rejection_evidence(
@@ -250,7 +256,7 @@ def _rejection_evidence(
     identity: Mapping[str, object],
     filter_outcome: HardFilterOutcome,
     *,
-    criteria: str | None,
+    criteria: SearchCriteria | None,
     hard_rejected: bool,
 ) -> dict[str, object]:
     reason_codes = (
@@ -262,6 +268,11 @@ def _rejection_evidence(
             else ()
         )
     )
+    if type(reason_codes) is not tuple or not reason_codes or len(reason_codes) > 3 or any(
+        type(code) is not str or _REASON_CODE.fullmatch(code) is None
+        for code in reason_codes
+    ):
+        raise ValueError("rejection reason codes must use bounded machine-code syntax")
     return {
         "identity": dict(identity),
         "decision": "hard_filter_rejection" if hard_rejected else "semantic_non_match",
@@ -272,7 +283,97 @@ def _rejection_evidence(
         ),
         "filter_result": filter_outcome.result,
         "reason_codes": list(reason_codes),
-        "source_receipt_reference": _source_receipt_reference(item),
-        "criteria_hash": criteria,
-        "assessment_hash": _assessment_hash(item.assessment, filter_outcome),
+        "criteria_hash": criteria.structured_sha256 if criteria is not None else None,
+        "readable_criteria_sha256": (
+            criteria.readable_criteria_sha256 if criteria is not None else None
+        ),
+        "assessment_hash": _assessment_hash(item.assessment, filter_outcome, criteria),
     }
+
+
+def _persist_rejection_receipt(
+    workspace: WorkspacePaths,
+    item: ReviewedJob,
+    rejection: Mapping[str, object],
+    filter_outcome: HardFilterOutcome,
+) -> str:
+    upstream = _validated_existing_receipt(workspace, item)
+    candidate = item.candidate
+    rationale = f"{rejection['decision']}:{','.join(rejection['reason_codes'])}"
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "identity": {
+            **dict(rejection["identity"]),
+            "posting_url": candidate.posting_url,
+            "application_url": candidate.application_url,
+        },
+        "source_snapshot": {
+            "verified_at": candidate.verified_at,
+            "verification_status": candidate.verification_status,
+            "raw_field_hash": candidate.raw_field_hash,
+        },
+        "responsibility_evidence": [
+            " ".join(value.split())[:160]
+            for value in candidate.responsibilities[:3]
+            if value.strip()
+        ],
+        "normalized_evidence": [
+            evidence_to_mapping(value) for value in filter_outcome.normalized_evidence
+        ],
+        "decision": rejection["decision"],
+        "filter_result": rejection["filter_result"],
+        "reason_codes": list(rejection["reason_codes"]),
+        "rationale_summary": rationale,
+        "criteria_hash": rejection["criteria_hash"],
+        "readable_criteria_sha256": rejection["readable_criteria_sha256"],
+        "assessment_hash": rejection["assessment_hash"],
+    }
+    if upstream is not None:
+        payload["upstream_source_receipt_reference"] = upstream
+    digest = hashlib.sha256(_canonical_json(payload)).hexdigest()
+    relative = f"Runs/discovery/sources/receipt-{digest}.json"
+    destination = workspace.root / relative
+    with workspace_lock(workspace):
+        if destination.exists():
+            if load_json(destination) != payload:
+                raise ValueError("immutable rejection receipt conflicts with existing data")
+        else:
+            atomic_write_json(destination, payload)
+    return relative
+
+
+def _validated_existing_receipt(
+    workspace: WorkspacePaths,
+    item: ReviewedJob,
+) -> str | None:
+    reference = item.source_receipt_reference
+    if reference is None:
+        return None
+    if type(reference) is not str:
+        raise ValueError("source receipt reference is invalid")
+    match = _RECEIPT_REFERENCE.fullmatch(reference)
+    if match is None:
+        raise ValueError("source receipt reference is invalid")
+    path = workspace.root / reference
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to((workspace.runs / "discovery" / "sources").resolve())
+    except (OSError, ValueError) as exc:
+        raise ValueError("source receipt reference is missing or outside discovery evidence") from exc
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("source receipt reference must identify a regular file")
+    try:
+        receipt = load_json(path)
+    except (OSError, ValueError) as exc:
+        raise ValueError("source receipt is invalid") from exc
+    if hashlib.sha256(_canonical_json(receipt)).hexdigest() != match.group(1):
+        raise ValueError("source receipt content hash does not match its reference")
+    identity = receipt.get("identity")
+    snapshot = receipt.get("source_snapshot")
+    if not isinstance(identity, Mapping) or not isinstance(snapshot, Mapping) or (
+        identity.get("source"), identity.get("source_record_id"), snapshot.get("raw_field_hash")
+    ) != (
+        item.candidate.source, item.candidate.source_record_id, item.candidate.raw_field_hash
+    ):
+        raise ValueError("source receipt does not match the reviewed candidate")
+    return reference

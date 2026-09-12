@@ -58,7 +58,7 @@ def _reviewed(path: Path) -> tuple[ReviewedJob, ...]:
                 assessment,
                 item["posting_markdown"],
                 item["assessment_markdown"],
-                criteria_evidence=item.get("criteria_evidence", {}),
+                criteria_evidence=item.get("criteria_evidence", ()),
                 source_receipt_reference=item.get("source_receipt_reference"),
             )
         )

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "career-pipeline/search-criteria-approval.schema.json",
+  "title": "Explicit structured search criteria approval",
+  "type": "object",
+  "required": ["schema_version", "readable_criteria_sha256", "structured_criteria_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "readable_criteria_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "structured_criteria_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "additionalProperties": false
+}

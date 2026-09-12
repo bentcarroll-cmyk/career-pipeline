@@ -3,78 +3,169 @@
   "$id": "career-pipeline/search-criteria.schema.json",
   "title": "Hash-bound structured search criteria",
   "type": "object",
-  "required": [
-    "schema_version",
-    "readable_criteria_path",
-    "readable_criteria_sha256",
-    "rules"
-  ],
+  "required": ["schema_version", "readable_criteria_path", "readable_criteria_sha256", "rules"],
   "properties": {
     "schema_version": {"const": 1},
     "readable_criteria_path": {"const": "Profile/Search_Criteria.md"},
-    "readable_criteria_sha256": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{64}$"
-    },
+    "readable_criteria_sha256": {"$ref": "#/$defs/hash"},
     "rules": {
       "type": "array",
-      "items": {
-        "type": "object",
-        "required": [
-          "criterion_id",
-          "dimension",
-          "classification",
-          "operator",
-          "values",
-          "reason_code",
-          "user_confirmed"
-        ],
-        "properties": {
-          "criterion_id": {"type": "string", "minLength": 1},
-          "dimension": {
-            "enum": [
-              "compensation",
-              "location",
-              "work_authorization",
-              "travel",
-              "timing",
-              "role",
-              "workplace"
-            ]
-          },
-          "classification": {
-            "enum": ["hard_exclusion", "preference", "unknown_tolerant"]
-          },
-          "operator": {
-            "enum": [
-              "equals",
-              "one_of",
-              "contains_any",
-              "minimum",
-              "maximum",
-              "on_or_after",
-              "on_or_before"
-            ]
-          },
-          "values": {
-            "type": "array",
-            "minItems": 1,
-            "items": {"type": "string"}
-          },
-          "reason_code": {"type": "string", "minLength": 1},
-          "user_confirmed": {"type": "boolean"}
-        },
-        "allOf": [
-          {
-            "if": {
-              "properties": {"classification": {"const": "hard_exclusion"}},
-              "required": ["classification"]
-            },
-            "then": {"properties": {"user_confirmed": {"const": true}}}
-          }
-        ],
-        "additionalProperties": false
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/rule"}
+    }
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "criterionId": {"type": "string", "pattern": "^[a-z][a-z0-9-]{2,63}$"},
+    "reasonCode": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$"},
+    "commonProperties": {
+      "type": "object",
+      "properties": {
+        "criterion_id": {"$ref": "#/$defs/criterionId"},
+        "classification": {"enum": ["hard_exclusion", "preference", "unknown_tolerant"]},
+        "reason_code": {"$ref": "#/$defs/reasonCode"},
+        "user_confirmed": {"type": "boolean"}
       }
+    },
+    "textValues": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 160}
+    },
+    "decimal": {"type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+)?$"},
+    "percent": {"type": "string", "pattern": "^(?:100(?:\\.0+)?|[0-9]{1,2}(?:\\.[0-9]+)?)$"},
+    "date": {"type": "string", "format": "date"},
+    "moneyThreshold": {
+      "type": "object",
+      "required": ["value", "unit", "currency", "pay_period"],
+      "properties": {
+        "value": {"$ref": "#/$defs/decimal"},
+        "unit": {"const": "money"},
+        "currency": {"enum": ["USD", "EUR", "GBP", "CAD"]},
+        "pay_period": {"enum": ["year", "month", "week", "hour"]}
+      },
+      "additionalProperties": false
+    },
+    "percentThreshold": {
+      "type": "object",
+      "required": ["value", "unit"],
+      "properties": {
+        "value": {"$ref": "#/$defs/percent"},
+        "unit": {"const": "percent"}
+      },
+      "additionalProperties": false
+    },
+    "dateThreshold": {
+      "type": "object",
+      "required": ["value"],
+      "properties": {"value": {"$ref": "#/$defs/date"}},
+      "additionalProperties": false
+    },
+    "rule": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["criterion_id", "dimension", "subject", "classification", "operator", "values", "reason_code", "user_confirmed"],
+          "properties": {
+            "criterion_id": {"$ref": "#/$defs/criterionId"},
+            "dimension": {"const": "location"},
+            "subject": {"const": "job_location"},
+            "classification": {"enum": ["hard_exclusion", "preference", "unknown_tolerant"]},
+            "operator": {"enum": ["equals", "one_of", "contains_any"]},
+            "values": {"$ref": "#/$defs/textValues"},
+            "reason_code": {"$ref": "#/$defs/reasonCode"},
+            "user_confirmed": {"type": "boolean"}
+          },
+          "allOf": [{
+            "if": {"properties": {"operator": {"const": "equals"}}, "required": ["operator"]},
+            "then": {"properties": {"values": {"maxItems": 1}}}
+          }],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["criterion_id", "dimension", "subject", "classification", "operator", "values", "reason_code", "user_confirmed"],
+          "properties": {
+            "criterion_id": {"$ref": "#/$defs/criterionId"},
+            "dimension": {"enum": ["work_authorization", "role", "workplace"]},
+            "subject": {"enum": ["required_authorization", "job_title", "workplace_model"]},
+            "classification": {"enum": ["hard_exclusion", "preference", "unknown_tolerant"]},
+            "operator": {"enum": ["equals", "one_of", "contains_any"]},
+            "values": {"$ref": "#/$defs/textValues"},
+            "reason_code": {"$ref": "#/$defs/reasonCode"},
+            "user_confirmed": {"type": "boolean"}
+          },
+          "allOf": [
+            {
+              "if": {"properties": {"operator": {"const": "equals"}}, "required": ["operator"]},
+              "then": {"properties": {"values": {"maxItems": 1}}}
+            },
+            {
+              "if": {"properties": {"dimension": {"const": "work_authorization"}}, "required": ["dimension"]},
+              "then": {"properties": {"subject": {"const": "required_authorization"}}}
+            },
+            {
+              "if": {"properties": {"dimension": {"const": "role"}}, "required": ["dimension"]},
+              "then": {"properties": {"subject": {"const": "job_title"}}}
+            },
+            {
+              "if": {"properties": {"dimension": {"const": "workplace"}}, "required": ["dimension"]},
+              "then": {"properties": {"subject": {"const": "workplace_model"}}}
+            }
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["criterion_id", "dimension", "subject", "classification", "operator", "threshold", "reason_code", "user_confirmed"],
+          "properties": {
+            "criterion_id": {"$ref": "#/$defs/criterionId"},
+            "dimension": {"const": "compensation"},
+            "subject": {"const": "base_compensation"},
+            "classification": {"enum": ["hard_exclusion", "preference", "unknown_tolerant"]},
+            "operator": {"enum": ["minimum", "maximum"]},
+            "threshold": {"$ref": "#/$defs/moneyThreshold"},
+            "reason_code": {"$ref": "#/$defs/reasonCode"},
+            "user_confirmed": {"type": "boolean"}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["criterion_id", "dimension", "subject", "classification", "operator", "threshold", "reason_code", "user_confirmed"],
+          "properties": {
+            "criterion_id": {"$ref": "#/$defs/criterionId"},
+            "dimension": {"const": "travel"},
+            "subject": {"const": "travel_percentage"},
+            "classification": {"enum": ["hard_exclusion", "preference", "unknown_tolerant"]},
+            "operator": {"enum": ["minimum", "maximum"]},
+            "threshold": {"$ref": "#/$defs/percentThreshold"},
+            "reason_code": {"$ref": "#/$defs/reasonCode"},
+            "user_confirmed": {"type": "boolean"}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["criterion_id", "dimension", "subject", "classification", "operator", "threshold", "reason_code", "user_confirmed"],
+          "properties": {
+            "criterion_id": {"$ref": "#/$defs/criterionId"},
+            "dimension": {"const": "timing"},
+            "subject": {"enum": ["application_deadline", "required_start_date"]},
+            "classification": {"enum": ["hard_exclusion", "preference", "unknown_tolerant"]},
+            "operator": {"enum": ["on_or_after", "on_or_before"]},
+            "threshold": {"$ref": "#/$defs/dateThreshold"},
+            "reason_code": {"$ref": "#/$defs/reasonCode"},
+            "user_confirmed": {"type": "boolean"}
+          },
+          "additionalProperties": false
+        }
+      ],
+      "allOf": [{
+        "if": {"properties": {"classification": {"const": "hard_exclusion"}}, "required": ["classification"]},
+        "then": {"properties": {"user_confirmed": {"const": true}}}
+      }]
     }
   },
   "additionalProperties": false
