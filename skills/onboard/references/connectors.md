@@ -1,6 +1,11 @@
 # Connector onboarding
 
-Every connector is optional. Offer each one separately, test semantic actions rather than installation status, and preserve a prior decline until the user changes it.
+Every connector is optional. Present them in purpose groups so the user can understand the choices without completing every setup during quick start. Offer each connector separately, test semantic actions rather than installation status, and preserve a prior decision until the user changes it.
+
+- Job discovery: Indeed, LinkedIn, Firecrawl, Browser, and USAJOBS.
+- Career context: Notion, GitHub, and Google Drive.
+- Lifecycle context: Gmail and Google Calendar.
+- Optional export: Linear.
 
 | Connector | Benefit and intended access | Fallback |
 | --- | --- | --- |
@@ -16,7 +21,7 @@ Every connector is optional. Offer each one separately, test semantic actions ra
 | Google Drive | Read-only resume import; backup only on an explicit request | Local files remain canonical |
 | USAJOBS | Federal-role discovery using the user's securely connected key | Federal API lane disabled |
 
-For each choice, record the observed actions. An installed connector missing the intended action is `unavailable`, not `connected`. Do not overstate LinkedIn people search as job-search coverage.
+For each choice, record the observed actions. Use `deferred` when the user is undecided and wants to resume setup later; use `declined` for an explicit skip and `unavailable` when the needed action cannot be used. A deferred nonessential connector does not block readiness when a public discovery lane is enabled. Do not overstate LinkedIn people search as job-search coverage.
 
 Linear is an export destination only. Do not use it for job IDs, duplicate checks, backlog reads, readiness, lifecycle state, or automatic packet delivery. A Linear export requires a separate current user request, exact readback, and a compact local receipt. Export failure never invalidates local work.
 

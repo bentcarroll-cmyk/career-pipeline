@@ -10,6 +10,7 @@
       "enum": [
         "privacy",
         "workspace",
+        "focus",
         "connectors",
         "resume",
         "interview",
@@ -21,10 +22,30 @@
       ]
     },
     "completed": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
-    "connectors": {"type": "object"},
+    "connectors": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["decision", "capabilities"],
+        "properties": {
+          "decision": {"enum": ["connected", "declined", "deferred", "unavailable"]},
+          "capabilities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+        },
+        "additionalProperties": false
+      }
+    },
     "receipts": {"type": "object"},
     "profile_hash": {"type": ["string", "null"]},
-    "criteria_hash": {"type": ["string", "null"]}
+    "criteria_hash": {"type": ["string", "null"]},
+    "mode": {"enum": ["full", "quick_start"]},
+    "post_activation": {
+      "type": "object",
+      "properties": {
+        "connector_configuration": {"enum": ["pending", "completed"]},
+        "interview": {"enum": ["pending", "completed"]}
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

@@ -14,3 +14,5 @@ Ask in manageable conversational groups and persist progress. Cover:
 10. Claims that remain uncertain or need corroboration.
 
 Use stable evidence identifiers in the career profile. Mark unsupported or uncertain claims; never turn an inference into fact. A later explicit correction overrides conflicting resume extraction.
+
+Quick start may collect only target work and hard constraints before activation. Persist the remaining interview as a post-activation item and resume these questions later; do not treat the abbreviated answers as a completed full interview.

@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "career-pipeline/actionable-backlog.schema.json",
+  "title": "Career Pipeline actionable backlog",
+  "type": "object",
+  "required": ["schema_version", "as_of", "source_hash", "ranking_policy", "actions"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "as_of": {"type": "string", "minLength": 1},
+    "source_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "ranking_policy": {
+      "type": "object",
+      "required": ["factor_order", "inactive_statuses", "lifecycle_priorities", "deadline_windows_days"],
+      "properties": {
+        "factor_order": {"type": "array", "items": {"type": "string"}},
+        "inactive_statuses": {"type": "array", "items": {"type": "string"}},
+        "lifecycle_priorities": {
+          "type": "object",
+          "additionalProperties": {"type": "integer"}
+        },
+        "deadline_windows_days": {"type": "array", "items": {"type": "integer"}}
+      },
+      "additionalProperties": false
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "rank",
+          "job_id",
+          "employer",
+          "title",
+          "status",
+          "disposition",
+          "fit_reason",
+          "major_gap",
+          "facts_needing_confirmation",
+          "source_freshness",
+          "deadline",
+          "recommended_next_action",
+          "ranking_factors",
+          "record_hash"
+        ],
+        "properties": {
+          "rank": {"type": "integer", "minimum": 1},
+          "job_id": {"type": "string", "pattern": "^JOB-[0-9]{6}$"},
+          "employer": {"type": "string", "minLength": 1},
+          "title": {"type": "string", "minLength": 1},
+          "status": {
+            "enum": ["new", "needs_confirmation", "prepare_application", "packet_ready", "applied", "interviewing", "offer"]
+          },
+          "disposition": {"enum": ["strong_match", "worth_considering"]},
+          "fit_reason": {"type": "string", "minLength": 1},
+          "major_gap": {"type": ["string", "null"]},
+          "facts_needing_confirmation": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1}
+          },
+          "source_freshness": {
+            "type": "object",
+            "required": ["verified_at", "reverified_at"],
+            "properties": {
+              "verified_at": {"type": "string", "minLength": 1},
+              "reverified_at": {"type": ["string", "null"]}
+            },
+            "additionalProperties": false
+          },
+          "deadline": {"type": ["string", "null"]},
+          "recommended_next_action": {"type": "string", "minLength": 1},
+          "ranking_factors": {
+            "type": "object",
+            "required": [
+              "lifecycle_status",
+              "lifecycle_priority",
+              "deadline_urgency",
+              "deadline_priority",
+              "needs_confirmation",
+              "interrupted_packet",
+              "disposition_priority"
+            ],
+            "properties": {
+              "lifecycle_status": {"type": "string"},
+              "lifecycle_priority": {"type": "integer"},
+              "deadline_urgency": {
+                "type": ["string", "null"],
+                "enum": ["overdue", "within_3_days", "within_7_days", "within_14_days", null]
+              },
+              "deadline_priority": {"type": "integer", "minimum": 0, "maximum": 4},
+              "needs_confirmation": {"type": "boolean"},
+              "interrupted_packet": {"type": "boolean"},
+              "disposition_priority": {"type": "integer", "minimum": 1, "maximum": 2}
+            },
+            "additionalProperties": false
+          },
+          "record_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

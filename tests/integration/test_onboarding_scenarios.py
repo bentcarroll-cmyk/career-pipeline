@@ -1,9 +1,11 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from career_pipeline.onboarding import (
     CONNECTORS,
+    InvalidTransition,
     OnboardingState,
     advance_onboarding,
     load_onboarding_state,
@@ -14,6 +16,124 @@ from career_pipeline.onboarding import (
 
 
 class OnboardingScenarioTests(unittest.TestCase):
+    def test_quick_start_is_resumable_through_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "onboarding-state.json"
+            state = OnboardingState.quick_start()
+            state = advance_onboarding(state, "workspace", {"privacy_approved": True})
+            state = advance_onboarding(
+                state, "resume", {"workspace_root": "/synthetic/workspace"}
+            )
+            state = advance_onboarding(
+                state, "focus", {"resume_receipt": "source-resume-receipt.json"}
+            )
+            state = advance_onboarding(
+                state,
+                "profile",
+                {
+                    "target_work": ["Synthetic operations leadership"],
+                    "hard_constraints": [],
+                },
+            )
+            state = record_profile_approval(
+                state, "profile-hash", "criteria-hash"
+            )
+            state = advance_onboarding(
+                state,
+                "packet_defaults",
+                {"profile_approved": True, "criteria_approved": True},
+            )
+            state = advance_onboarding(
+                state,
+                "connectors",
+                {"resume_pages": 2, "cover_letter_enabled": True},
+            )
+            for connector in CONNECTORS:
+                state = record_connector_decision(state, connector, "deferred", ())
+            state = advance_onboarding(
+                state, "schedule", {"connector_decisions_recorded": True}
+            )
+            state = advance_onboarding(
+                state,
+                "readiness",
+                {"enabled_sources": ["public_ats"]},
+            )
+            save_onboarding_state(path, state)
+
+            resumed = load_onboarding_state(path)
+            active = advance_onboarding(resumed, "active", {"ready": True})
+            save_onboarding_state(path, active)
+            loaded = load_onboarding_state(path)
+
+        self.assertEqual(loaded.stage, "active")
+        self.assertEqual(loaded.mode, "quick_start")
+        self.assertTrue(all(item.decision == "deferred" for item in loaded.connectors.values()))
+        self.assertEqual(
+            loaded.post_activation,
+            {"connector_configuration": "pending", "interview": "pending"},
+        )
+
+    def test_quick_start_requires_focus_and_a_public_discovery_lane(self) -> None:
+        state = OnboardingState.quick_start()
+        state = advance_onboarding(state, "workspace", {"privacy_approved": True})
+        state = advance_onboarding(state, "resume", {"workspace_root": "/synthetic"})
+        state = advance_onboarding(state, "focus", {"resume_receipt": "receipt"})
+        with self.assertRaises(InvalidTransition):
+            advance_onboarding(state, "profile", {"target_work": ["Operations"]})
+
+        ready = OnboardingState(
+            stage="schedule",
+            completed=(
+                "privacy",
+                "workspace",
+                "resume",
+                "focus",
+                "profile",
+                "packet_defaults",
+                "connectors",
+            ),
+            connectors={
+                connector: record_connector_decision(
+                    OnboardingState.quick_start(), connector, "deferred", ()
+                ).connectors[connector]
+                for connector in CONNECTORS
+            },
+            receipts={"focus": {"target_work": ["Operations"], "hard_constraints": []}},
+            profile_hash="profile-hash",
+            criteria_hash="criteria-hash",
+            mode="quick_start",
+            post_activation={
+                "connector_configuration": "pending",
+                "interview": "pending",
+            },
+        )
+        with self.assertRaises(InvalidTransition):
+            advance_onboarding(ready, "readiness", {"enabled_sources": ["linear"]})
+
+    def test_quick_start_resume_rejects_a_missing_required_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "onboarding-state.json"
+            state = OnboardingState.quick_start()
+            state = advance_onboarding(state, "workspace", {"privacy_approved": True})
+            state = advance_onboarding(
+                state, "resume", {"workspace_root": "/synthetic/workspace"}
+            )
+            state = advance_onboarding(
+                state, "focus", {"resume_receipt": "source-resume-receipt.json"}
+            )
+            state = advance_onboarding(
+                state,
+                "profile",
+                {"target_work": ["Operations"], "hard_constraints": []},
+            )
+            save_onboarding_state(path, state)
+            raw_state = json.loads(path.read_text(encoding="utf-8"))
+            del raw_state["receipts"]["focus"]
+            path.write_text(json.dumps(raw_state), encoding="utf-8")
+
+            with self.assertRaises(ValueError):
+                load_onboarding_state(path)
+
     def test_interrupted_state_resumes_with_receipts_and_declines(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             path = Path(raw) / "onboarding-state.json"

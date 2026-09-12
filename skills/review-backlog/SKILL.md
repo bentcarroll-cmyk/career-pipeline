@@ -9,8 +9,8 @@ Help the user understand and manage the canonical local opportunity backlog. Rea
 
 ## Workflow
 
-1. Resolve the configured workspace and validate or regenerate `Indexes/backlog.json` from canonical `Jobs/` folders.
-2. Summarize new roles, compare exact local job IDs using stored assessment evidence, or surface deadlines without reclassifying from title alone.
+1. Resolve the configured workspace and build `Indexes/actionable-backlog.json` from canonical `Jobs/` folders with `scripts/review_backlog.py --workspace <root> --as-of <timestamp>`. Treat the generated view as disposable.
+2. Present the deterministic ranked action view or compare exact local job IDs using stored assessment evidence. Include stored fit, the first recorded major gap, source freshness, deadline, facts needing confirmation, and the recommended action without inventing missing values.
 3. For an explicit not-pursuing or lifecycle decision, update the exact `job.json`, append an event, read both back, and regenerate affected indexes.
 4. When the user explicitly selects one or more exact local job IDs for materials, validate every canonical folder, preserve order and per-role instructions, and invoke Prepare application immediately in the same conversation.
 

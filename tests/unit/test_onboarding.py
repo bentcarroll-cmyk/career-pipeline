@@ -2,9 +2,11 @@ import unittest
 
 from career_pipeline.onboarding import (
     CONNECTORS,
+    CONNECTOR_GROUPS,
     InvalidTransition,
     OnboardingState,
     advance_onboarding,
+    record_post_activation_progress,
     record_connector_decision,
     record_profile_approval,
 )
@@ -54,6 +56,52 @@ class OnboardingTests(unittest.TestCase):
         approved = record_profile_approval(state, "profile-hash", "criteria-hash")
         self.assertEqual(approved.profile_hash, "profile-hash")
         self.assertEqual(approved.criteria_hash, "criteria-hash")
+
+    def test_connector_deferral_is_distinct_and_grouped_by_purpose(self) -> None:
+        self.assertEqual(
+            {connector for group in CONNECTOR_GROUPS.values() for connector in group},
+            set(CONNECTORS),
+        )
+        self.assertEqual(
+            sum(len(group) for group in CONNECTOR_GROUPS.values()),
+            len(CONNECTORS),
+        )
+        state = record_connector_decision(
+            OnboardingState.quick_start(), "indeed", "deferred", ()
+        )
+        self.assertEqual(state.connectors["indeed"].decision, "deferred")
+
+    def test_quick_start_follow_up_remains_resumable_after_activation(self) -> None:
+        state = OnboardingState.quick_start()
+        state = OnboardingState(
+            stage="active",
+            completed=state.completed,
+            connectors={
+                connector: record_connector_decision(
+                    state, connector, "deferred", ()
+                ).connectors[connector]
+                for connector in CONNECTORS
+            },
+            receipts=state.receipts,
+            profile_hash="profile-hash",
+            criteria_hash="criteria-hash",
+            mode="quick_start",
+            post_activation=state.post_activation,
+        )
+        progressed = record_post_activation_progress(
+            state, "interview", completed=True
+        )
+
+        self.assertEqual(progressed.post_activation["interview"], "completed")
+        self.assertEqual(
+            progressed.post_activation["connector_configuration"], "pending"
+        )
+
+    def test_post_activation_progress_requires_an_active_quick_start(self) -> None:
+        with self.assertRaises(InvalidTransition):
+            record_post_activation_progress(
+                OnboardingState.quick_start(), "interview", completed=True
+            )
 
 
 if __name__ == "__main__":

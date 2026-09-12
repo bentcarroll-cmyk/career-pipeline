@@ -324,6 +324,15 @@ class ReadinessTests(unittest.TestCase):
 
             self.assertIn("onboarding_not_ready", check_readiness(config, early).failure_codes)
 
+    def test_deferred_nonessential_connectors_do_not_block_public_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root, config, state = self._ready_workspace(Path(raw))
+            for connector in CONNECTORS:
+                state = record_connector_decision(state, connector, "deferred", ())
+            save_onboarding_state(root / "State" / "onboarding-state.json", state)
+
+            self.assertTrue(check_readiness(config, state).ready)
+
 
 if __name__ == "__main__":
     unittest.main()

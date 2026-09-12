@@ -34,6 +34,8 @@ def _state_from_raw(raw: dict[str, object]) -> OnboardingState:
         receipts=raw.get("receipts", {}),
         profile_hash=raw.get("profile_hash"),
         criteria_hash=raw.get("criteria_hash"),
+        mode=raw.get("mode", "full"),
+        post_activation=raw.get("post_activation", {}),
     )
 
 

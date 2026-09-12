@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
+import hashlib
+import re
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
+from .atomic import atomic_write_json
 from .contracts import WorkspacePaths
 from .indexes import load_indexes
-from .job_store import JobStoreError, read_job, update_job_status
+from .job_store import JobStoreError, read_job, update_job_status, workspace_lock
+from .timestamps import TimestampError, parse_instant
 
 
 class SelectionError(ValueError):
@@ -22,6 +27,260 @@ class PacketSelection:
     @property
     def ticket_ids(self) -> tuple[str, ...]:
         return self.job_ids
+
+
+_JOB_DIR = re.compile(r"JOB-[0-9]{6}")
+_INACTIVE_STATUSES = frozenset({"not_pursuing", "closed"})
+_LIFECYCLE_PRIORITY = {
+    "offer": 900,
+    "interviewing": 800,
+    "applied": 700,
+    "prepare_application": 600,
+    "packet_ready": 500,
+    "needs_confirmation": 400,
+    "new": 300,
+}
+_DISPOSITION_PRIORITY = {"strong_match": 2, "worth_considering": 1}
+
+
+def _canonical_records(
+    workspace: WorkspacePaths,
+) -> tuple[tuple[dict[str, object], str], ...]:
+    records: list[tuple[dict[str, object], str]] = []
+    for job_dir in sorted(workspace.jobs.iterdir(), key=lambda path: path.name):
+        if not job_dir.is_dir() or _JOB_DIR.fullmatch(job_dir.name) is None:
+            continue
+        record = read_job(workspace, job_dir.name)
+        record_hash = hashlib.sha256((job_dir / "job.json").read_bytes()).hexdigest()
+        records.append((record, record_hash))
+    return tuple(records)
+
+
+def _source_hash(records: Sequence[tuple[Mapping[str, object], str]]) -> str:
+    digest = hashlib.sha256()
+    for record, record_hash in records:
+        digest.update(str(record["job_id"]).encode("utf-8"))
+        digest.update(b"\x00")
+        digest.update(record_hash.encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _first_fact(value: object) -> str | None:
+    if not isinstance(value, list):
+        return None
+    return next(
+        (item for item in value if isinstance(item, str) and item.strip()),
+        None,
+    )
+
+
+def _facts(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item.strip()]
+
+
+def _deadline_date(value: object) -> date | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
+            return date.fromisoformat(value)
+        return parse_instant(value).date()
+    except (TimestampError, ValueError):
+        return None
+
+
+def _deadline_factor(value: object, *, as_of: datetime) -> tuple[int, str | None]:
+    deadline = _deadline_date(value)
+    if deadline is None:
+        return 0, None
+    days = (deadline - as_of.date()).days
+    if days < 0:
+        return 4, "overdue"
+    if days <= 3:
+        return 3, "within_3_days"
+    if days <= 7:
+        return 2, "within_7_days"
+    if days <= 14:
+        return 1, "within_14_days"
+    return 0, None
+
+
+def _freshness_sort_value(record: Mapping[str, object]) -> float:
+    value = record.get("reverified_at") or record.get("verified_at")
+    try:
+        return parse_instant(str(value)).timestamp()
+    except (TimestampError, ValueError, TypeError):
+        return 0.0
+
+
+def _recommended_action(
+    record: Mapping[str, object],
+    *,
+    deadline_urgency: str | None,
+    confirmation: str | None,
+) -> str:
+    status = record["status"]
+    decisions = {
+        "offer": "Review the recorded offer and decide the next user action.",
+        "interviewing": "Prepare for the active interview process.",
+        "applied": "Monitor the application for verified lifecycle evidence.",
+        "prepare_application": (
+            "Resume or explicitly restart the interrupted application packet."
+        ),
+        "packet_ready": "Review the ready packet and decide whether to submit it.",
+    }
+    if status in decisions:
+        return decisions[str(status)]
+    if status == "needs_confirmation" and confirmation is not None:
+        return "Resolve the recorded fact needing confirmation."
+    if deadline_urgency is not None:
+        return "Review this role before its recorded deadline."
+    return str(record["recommended_next_action"])
+
+
+def build_actionable_backlog(
+    workspace: WorkspacePaths,
+    *,
+    as_of: str,
+) -> dict[str, object]:
+    """Build and save a disposable action view solely from canonical job records."""
+
+    try:
+        as_of_instant = parse_instant(as_of)
+    except TimestampError as exc:
+        raise ValueError("as_of must be an ISO 8601 timestamp with a timezone") from exc
+    with workspace_lock(workspace):
+        canonical = _canonical_records(workspace)
+        ranked: list[tuple[tuple[object, ...], dict[str, object]]] = []
+        for record, record_hash in canonical:
+            status = str(record["status"])
+            if status in _INACTIVE_STATUSES:
+                continue
+            deadline_priority, deadline_urgency = _deadline_factor(
+                record.get("deadline"), as_of=as_of_instant
+            )
+            confirmation = _first_fact(record.get("uncertainties"))
+            confirmations = _facts(record.get("uncertainties"))
+            major_gap = _first_fact(record.get("gaps"))
+            interrupted = status == "prepare_application"
+            factors = {
+                "lifecycle_status": status,
+                "lifecycle_priority": _LIFECYCLE_PRIORITY[status],
+                "deadline_urgency": deadline_urgency,
+                "deadline_priority": deadline_priority,
+                "needs_confirmation": (
+                    status == "needs_confirmation" or bool(confirmations)
+                ),
+                "interrupted_packet": interrupted,
+                "disposition_priority": _DISPOSITION_PRIORITY[
+                    str(record["disposition"])
+                ],
+            }
+            item = {
+                "job_id": record["job_id"],
+                "employer": record["employer"],
+                "title": record["title"],
+                "status": status,
+                "disposition": record["disposition"],
+                "fit_reason": record["role_to_profile_fit"],
+                "major_gap": major_gap,
+                "facts_needing_confirmation": confirmations,
+                "source_freshness": {
+                    "verified_at": record.get("verified_at"),
+                    "reverified_at": record.get("reverified_at"),
+                },
+                "deadline": record.get("deadline"),
+                "recommended_next_action": _recommended_action(
+                    record,
+                    deadline_urgency=deadline_urgency,
+                    confirmation=confirmation,
+                ),
+                "ranking_factors": factors,
+                "record_hash": record_hash,
+            }
+            sort_key = (
+                -int(factors["lifecycle_priority"]),
+                -deadline_priority,
+                -int(bool(factors["needs_confirmation"])),
+                -int(factors["disposition_priority"]),
+                -_freshness_sort_value(record),
+                str(record["job_id"]),
+            )
+            ranked.append((sort_key, item))
+        ranked.sort(key=lambda pair: pair[0])
+        actions: list[dict[str, object]] = []
+        for rank, (_, item) in enumerate(ranked, start=1):
+            actions.append({"rank": rank, **item})
+        view = {
+            "schema_version": 1,
+            "as_of": as_of_instant.isoformat().replace("+00:00", "Z"),
+            "source_hash": _source_hash(canonical),
+            "ranking_policy": {
+                "factor_order": [
+                    "lifecycle_priority",
+                    "deadline_priority",
+                    "needs_confirmation",
+                    "disposition_priority",
+                    "source_freshness",
+                    "job_id",
+                ],
+                "inactive_statuses": sorted(_INACTIVE_STATUSES),
+                "lifecycle_priorities": dict(_LIFECYCLE_PRIORITY),
+                "deadline_windows_days": [0, 3, 7, 14],
+            },
+            "actions": actions,
+        }
+        atomic_write_json(workspace.indexes / "actionable-backlog.json", view)
+        return view
+
+
+def render_actionable_backlog(view: Mapping[str, object]) -> str:
+    actions = view.get("actions")
+    if not isinstance(actions, list):
+        raise ValueError("actionable backlog is invalid")
+    lines = [f"Actionable backlog as of {view.get('as_of')}"]
+    if not actions:
+        return "\n".join((*lines, "No active roles."))
+    for raw in actions:
+        if not isinstance(raw, Mapping):
+            raise ValueError("actionable backlog is invalid")
+        freshness = raw.get("source_freshness")
+        factors = raw.get("ranking_factors")
+        if not isinstance(freshness, Mapping) or not isinstance(factors, Mapping):
+            raise ValueError("actionable backlog is invalid")
+        lines.extend(
+            (
+                f"{raw['rank']}. {raw['job_id']} — {raw['employer']} — {raw['title']}",
+                f"   Status: {raw['status']} | Disposition: {raw['disposition']}",
+                f"   Fit: {raw['fit_reason']}",
+                f"   Major gap: {raw.get('major_gap') or 'unknown'}",
+                (
+                    "   Confirm: "
+                    + (
+                        "; ".join(raw.get("facts_needing_confirmation", ()))
+                        if raw.get("facts_needing_confirmation")
+                        else "unknown"
+                    )
+                ),
+                (
+                    "   Source freshness: verified "
+                    f"{freshness.get('verified_at') or 'unknown'}; reverified "
+                    f"{freshness.get('reverified_at') or 'unknown'}"
+                ),
+                f"   Deadline: {raw.get('deadline') or 'unknown'}",
+                f"   Next: {raw['recommended_next_action']}",
+                (
+                    "   Ranking: lifecycle="
+                    f"{factors.get('lifecycle_priority')}, deadline="
+                    f"{factors.get('deadline_priority')}, confirmation="
+                    f"{str(bool(factors.get('needs_confirmation'))).lower()}"
+                ),
+            )
+        )
+    return "\n".join(lines)
 
 
 def selection_from_request(
