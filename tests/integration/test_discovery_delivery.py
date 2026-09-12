@@ -61,6 +61,60 @@ def reviewed(number: int, disposition: str = "strong_match") -> ReviewedJob:
 
 
 class DiscoveryDeliveryTests(unittest.TestCase):
+    def test_out_of_order_reverification_cannot_replace_newer_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            first = deliver_reviewed_jobs(
+                workspace,
+                DiscoveryState(),
+                (reviewed(798),),
+                occurred_at="2026-09-11T18:00:00Z",
+            )
+            newer_review = reviewed(798)
+            newer_review = replace(
+                newer_review,
+                candidate=replace(
+                    newer_review.candidate,
+                    deadline="2026-10-15",
+                    verified_at="2026-09-11T20:00:00Z",
+                    raw_field_hash="e" * 64,
+                ),
+                posting_markdown="# Newer synthetic posting\n",
+            )
+            newer = deliver_reviewed_jobs(
+                workspace,
+                first.state,
+                (newer_review,),
+                occurred_at="2026-09-11T20:05:00Z",
+            )
+            stale_review = replace(
+                newer_review,
+                candidate=replace(
+                    newer_review.candidate,
+                    deadline="2026-09-30",
+                    verified_at="2026-09-11T19:00:00Z",
+                    raw_field_hash="d" * 64,
+                ),
+                posting_markdown="# Stale synthetic posting\n",
+            )
+
+            stale = deliver_reviewed_jobs(
+                workspace,
+                newer.state,
+                (stale_review,),
+                occurred_at="2026-09-11T19:05:00Z",
+            )
+
+            canonical = read_job(workspace, "JOB-000001")
+            self.assertEqual(stale.meaningful_change_job_ids, ())
+            self.assertEqual(canonical["deadline"], "2026-10-15")
+            self.assertEqual(canonical["verified_at"], "2026-09-11T20:00:00Z")
+            self.assertEqual(canonical["reverified_at"], "2026-09-11T20:05:00Z")
+            self.assertEqual(
+                (workspace.jobs / "JOB-000001" / "posting.md").read_text(),
+                "# Newer synthetic posting\n",
+            )
+
     def test_unchanged_success_refreshes_reverification_without_change_alert(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace = create_workspace(Path(raw) / "Synthetic-Career")

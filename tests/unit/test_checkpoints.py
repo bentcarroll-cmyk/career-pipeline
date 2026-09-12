@@ -15,6 +15,47 @@ from career_pipeline.workspace import create_workspace
 
 
 class CheckpointTests(unittest.TestCase):
+    def test_checkpoint_recency_uses_instants_instead_of_timestamp_text(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            merge_discovery_state(
+                workspace,
+                DiscoveryState(),
+                (
+                    (
+                        "greenhouse",
+                        SourceResult(
+                            True,
+                            "2026-09-11T12:30:00+00:00",
+                            ("SYN-OLD",),
+                            "old",
+                        ),
+                    ),
+                ),
+            )
+
+            merged = merge_discovery_state(
+                workspace,
+                DiscoveryState(),
+                (
+                    (
+                        "greenhouse",
+                        SourceResult(
+                            True,
+                            "2026-09-11T09:00:00-04:00",
+                            ("SYN-NEW",),
+                            "new",
+                        ),
+                    ),
+                ),
+            )
+
+            self.assertEqual(merged.sources["greenhouse"].cursor, "new")
+            self.assertEqual(
+                merged.sources["greenhouse"].seen_records,
+                ("SYN-NEW",),
+            )
+
     def test_stale_runs_merge_independent_source_and_identity_updates(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace = create_workspace(Path(raw) / "Synthetic-Career")

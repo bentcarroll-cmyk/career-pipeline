@@ -11,6 +11,7 @@ from typing import Mapping
 from .atomic import atomic_write_json, load_json
 from .contracts import WorkspacePaths
 from .job_store import workspace_lock
+from .timestamps import TimestampError, parse_instant
 
 
 @dataclass(frozen=True)
@@ -166,13 +167,21 @@ def merge_discovery_state(
         )
         for source, result in source_results:
             checkpoint = merged.sources.get(source)
-            if (
-                result.success
-                and checkpoint is not None
-                and checkpoint.last_successful_at is not None
-                and checkpoint.last_successful_at > result.completed_at
-            ):
-                continue
+            if result.success:
+                try:
+                    completed_at = parse_instant(result.completed_at)
+                    previous_at = (
+                        parse_instant(checkpoint.last_successful_at)
+                        if checkpoint is not None
+                        and checkpoint.last_successful_at is not None
+                        else None
+                    )
+                except TimestampError as exc:
+                    raise DiscoveryStateError(
+                        "source checkpoint timestamps must be timezone-aware ISO 8601"
+                    ) from exc
+                if previous_at is not None and previous_at > completed_at:
+                    continue
             merged = complete_source(merged, source, result)
         save_discovery_state(state_path, merged)
         return merged

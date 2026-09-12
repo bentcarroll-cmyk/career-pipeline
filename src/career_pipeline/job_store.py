@@ -20,6 +20,7 @@ from .dedupe import candidate_key, fallback_identity, requisition_identity
 from .evaluation import JobAssessment
 from .schema import validate_document
 from .sources.base import CandidateJob
+from .timestamps import TimestampError, parse_instant
 
 
 class JobStoreError(ValueError):
@@ -472,8 +473,23 @@ def reverify_job(
         )
         if candidate_key(candidate) != current_identity:
             raise JobStoreError("reverification identity does not match canonical job")
+        try:
+            current_verified_at = parse_instant(str(current["verified_at"]))
+            candidate_verified_at = parse_instant(candidate.verified_at)
+            occurred_instant = parse_instant(occurred_at)
+            prior_reverified_at = current.get("reverified_at")
+            prior_reverified_instant = (
+                parse_instant(str(prior_reverified_at))
+                if prior_reverified_at is not None
+                else None
+            )
+        except TimestampError as exc:
+            raise JobStoreError(
+                "reverification timestamps must be timezone-aware ISO 8601"
+            ) from exc
         same_source = current.get("source") == candidate.source
         same_content = current.get("raw_field_hash") == candidate.raw_field_hash
+        evidence_is_current = candidate_verified_at >= current_verified_at
         exact_requisition = bool(
             current.get("requisition_id")
             and candidate.requisition_id
@@ -486,8 +502,9 @@ def reverify_job(
         stronger_source = _SOURCE_PRIORITY.get(candidate.source, 0) > _SOURCE_PRIORITY.get(
             str(current.get("source", "")), 0
         )
-        replace_evidence = (same_source and not same_content) or (
-            not same_source and exact_requisition and stronger_source
+        replace_evidence = evidence_is_current and (
+            (same_source and not same_content)
+            or (not same_source and exact_requisition and stronger_source)
         )
         if replace_evidence:
             updated = _build_record(job_id, candidate, assessment)
@@ -506,7 +523,14 @@ def reverify_job(
         else:
             updated = dict(current)
             file_updates = None
-        updated["reverified_at"] = occurred_at
+            if same_source and same_content and evidence_is_current:
+                updated["verified_at"] = candidate.verified_at
+        updated["reverified_at"] = (
+            str(prior_reverified_at)
+            if prior_reverified_instant is not None
+            and prior_reverified_instant > occurred_instant
+            else occurred_at
+        )
         changed_fields = tuple(
             sorted(
                 field
@@ -527,6 +551,7 @@ def reverify_job(
             metadata={
                 "changed_fields": list(changed_fields),
                 "verification_source": candidate.source,
+                "stale_evidence_ignored": not evidence_is_current,
             },
         )
         _commit_job_mutation_locked(
