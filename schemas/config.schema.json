@@ -54,7 +54,14 @@
     },
     "packet_defaults": {
       "type": "object",
-      "required": ["resume_pages", "cover_letter_enabled", "cover_letter_pages"]
+      "required": ["resume_pages", "cover_letter_enabled", "cover_letter_pages"],
+      "properties": {
+        "resume_pages": {"const": 2},
+        "cover_letter_enabled": {"type": "boolean"},
+        "cover_letter_pages": {"enum": [0, 1]}
+      },
+      "additionalProperties": false
     }
-  }
+  },
+  "additionalProperties": false
 }

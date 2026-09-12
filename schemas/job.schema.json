@@ -76,6 +76,12 @@
     "paths": {
       "type": "object",
       "required": ["posting", "assessment", "events", "working"],
+      "properties": {
+        "posting": {"type": "string", "pattern": "^Jobs/JOB-[0-9]{6}/posting\\.md$"},
+        "assessment": {"type": "string", "pattern": "^Jobs/JOB-[0-9]{6}/assessment\\.md$"},
+        "events": {"type": "string", "pattern": "^Jobs/JOB-[0-9]{6}/events\\.jsonl$"},
+        "working": {"type": "string", "pattern": "^Jobs/JOB-[0-9]{6}/working$"}
+      },
       "additionalProperties": false
     },
     "application_versions": {"type": "array"},

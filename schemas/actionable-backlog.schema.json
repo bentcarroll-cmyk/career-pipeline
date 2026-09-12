@@ -73,7 +73,7 @@
           "deadline": {"type": ["string", "null"]},
           "packet_stage": {
             "type": ["string", "null"],
-            "enum": ["selected", "posting_verified", "drafted", "quality_checked", "saved", "local_verified", null]
+            "enum": ["selected", "posting_verified", "drafted", "quality_checked", "saved", "local_verified", "ready", null]
           },
           "packet_version": {
             "type": ["string", "null"],
