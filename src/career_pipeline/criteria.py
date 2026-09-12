@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -14,6 +14,7 @@ from typing import Callable, Mapping, Sequence
 from .atomic import atomic_write_json, load_json
 from .contracts import WorkspacePaths
 from .evaluation import JobAssessment
+from .job_store import workspace_lock
 from .onboarding import load_onboarding_state
 from .sources.base import CandidateJob
 
@@ -135,6 +136,10 @@ _EVIDENCE_KEYS = {
     "source", "source_record_id", "source_field_hash", "text_value", "lower_bound",
     "upper_bound", "unit", "currency", "pay_period",
 }
+_EVIDENCE_COMMON_KEYS = {
+    "dimension", "subject", "status", "value_type", "provenance", "certainty",
+    "source", "source_record_id", "source_field_hash",
+}
 
 
 def criteria_to_mapping(criteria: SearchCriteria) -> dict[str, object]:
@@ -240,12 +245,16 @@ def resolve_workspace_criteria(
         approval = load_json(approval_path)
     except (OSError, ValueError) as exc:
         raise CriteriaError("structured search criteria approval is missing or invalid") from exc
-    expected_approval = {
+    expected_approval: dict[str, object] = {
         "schema_version": 1,
         "readable_criteria_sha256": current.readable_criteria_sha256,
         "structured_criteria_sha256": current.structured_sha256,
     }
-    if onboarding.criteria_hash != current.readable_criteria_sha256 or approval != expected_approval:
+    if (
+        onboarding.criteria_hash != current.readable_criteria_sha256
+        or not _valid_approval(approval)
+        or approval != expected_approval
+    ):
         raise CriteriaError("structured search criteria is not currently approved")
     if supplied is not None:
         validate_search_criteria(supplied)
@@ -254,36 +263,72 @@ def resolve_workspace_criteria(
     return current
 
 
-def approve_workspace_criteria(workspace: WorkspacePaths) -> dict[str, object]:
+def approve_workspace_criteria(
+    workspace: WorkspacePaths,
+    *,
+    expected_readable_sha256: str,
+    expected_structured_sha256: str,
+) -> dict[str, object]:
     """Persist approval for the current readable and structured criteria pair.
 
     Callers invoke this only after the user has reviewed and explicitly approved
     both files. The onboarding state must already identify the current readable
     document, so this helper cannot approve drifted content.
     """
-    structured_path = workspace.profile / "Search_Criteria.json"
-    readable_path = workspace.profile / "Search_Criteria.md"
     if (
-        structured_path.is_symlink()
-        or readable_path.is_symlink()
-        or not structured_path.is_file()
-        or not readable_path.is_file()
+        type(expected_readable_sha256) is not str
+        or _HASH.fullmatch(expected_readable_sha256) is None
+        or type(expected_structured_sha256) is not str
+        or _HASH.fullmatch(expected_structured_sha256) is None
     ):
-        raise CriteriaError("current readable and structured criteria are required")
-    current = load_search_criteria(structured_path, readable_path=readable_path)
-    try:
-        onboarding = load_onboarding_state(workspace.state / "onboarding-state.json")
-    except (OSError, ValueError) as exc:
-        raise CriteriaError("readable search criteria approval is missing or invalid") from exc
-    if onboarding.criteria_hash != current.readable_criteria_sha256:
-        raise CriteriaError("readable search criteria is not currently approved")
-    approval: dict[str, object] = {
-        "schema_version": 1,
-        "readable_criteria_sha256": current.readable_criteria_sha256,
-        "structured_criteria_sha256": current.structured_sha256,
-    }
-    atomic_write_json(workspace.state / "search-criteria-approval.json", approval)
-    return approval
+        raise CriteriaError("expected reviewed criteria hashes are invalid")
+    with workspace_lock(workspace):
+        structured_path = workspace.profile / "Search_Criteria.json"
+        readable_path = workspace.profile / "Search_Criteria.md"
+        onboarding_path = workspace.state / "onboarding-state.json"
+        if (
+            structured_path.is_symlink()
+            or readable_path.is_symlink()
+            or onboarding_path.is_symlink()
+            or not structured_path.is_file()
+            or not readable_path.is_file()
+            or not onboarding_path.is_file()
+        ):
+            raise CriteriaError("current criteria and onboarding approval must be regular files")
+        current = load_search_criteria(structured_path, readable_path=readable_path)
+        try:
+            onboarding = load_onboarding_state(onboarding_path)
+        except (OSError, ValueError) as exc:
+            raise CriteriaError("readable search criteria approval is missing or invalid") from exc
+        if (
+            onboarding.criteria_hash != expected_readable_sha256
+            or current.readable_criteria_sha256 != expected_readable_sha256
+            or current.structured_sha256 != expected_structured_sha256
+        ):
+            raise CriteriaError("current criteria do not match the reviewed approval snapshot")
+        approval: dict[str, object] = {
+            "schema_version": 1,
+            "readable_criteria_sha256": expected_readable_sha256,
+            "structured_criteria_sha256": expected_structured_sha256,
+        }
+        atomic_write_json(workspace.state / "search-criteria-approval.json", approval)
+        return approval
+
+
+def _valid_approval(value: object) -> bool:
+    return (
+        type(value) is dict
+        and set(value) == {
+            "schema_version", "readable_criteria_sha256",
+            "structured_criteria_sha256",
+        }
+        and type(value.get("schema_version")) is int
+        and value.get("schema_version") == 1
+        and type(value.get("readable_criteria_sha256")) is str
+        and _HASH.fullmatch(value["readable_criteria_sha256"]) is not None
+        and type(value.get("structured_criteria_sha256")) is str
+        and _HASH.fullmatch(value["structured_criteria_sha256"]) is not None
+    )
 
 
 def evaluate_hard_filters(
@@ -335,6 +380,16 @@ def filter_then_assess(
 
 def evidence_to_mapping(value: NormalizedEvidence) -> dict[str, object]:
     return {key: item for key, item in asdict(value).items() if item is not None}
+
+
+def normalized_evidence_from_mapping(raw: object) -> NormalizedEvidence | None:
+    """Return strictly variant-valid normalized evidence, or ``None``."""
+    return _evidence_from_mapping(raw)
+
+
+def normalized_evidence_is_valid(value: NormalizedEvidence) -> bool:
+    """Validate a normalized-evidence dataclass without trusting omitted fields."""
+    return _valid_evidence_contract(value)
 
 
 def _rule_from_mapping(raw: object, index: int) -> CriteriaRule:
@@ -434,7 +489,7 @@ def _validate_rule(rule: CriteriaRule, index: int) -> None:
         ):
             raise CriteriaError(f"criteria rule {index} compensation units are invalid")
         return
-    if rule.operator not in _DATE_OPERATORS or set(asdict(rule.threshold)) - {"value"} != {"unit", "currency", "pay_period"}:
+    if rule.operator not in _DATE_OPERATORS:
         raise CriteriaError(f"criteria rule {index} date threshold is invalid")
     if any((rule.threshold.unit, rule.threshold.currency, rule.threshold.pay_period)):
         raise CriteriaError(f"criteria rule {index} date units are invalid")
@@ -461,7 +516,8 @@ def _candidate_evidence(candidate: CandidateJob, dimension: str, subject: str) -
     if text is not None:
         cleaned = " ".join(text.split())
         if (
-            cleaned.casefold() not in _UNKNOWN_TEXT
+            cleaned
+            and cleaned.casefold() not in _UNKNOWN_TEXT
             and len(cleaned) <= 280
             and common["certainty"] == "verified"
         ):
@@ -488,13 +544,19 @@ def _validated_evidence(candidate: CandidateJob, raw: object) -> dict[tuple[str,
     grouped: dict[tuple[str, str], list[NormalizedEvidence]] = {}
     for item in raw:
         parsed = item if isinstance(item, NormalizedEvidence) else _evidence_from_mapping(item)
-        if parsed is None or not _valid_evidence(parsed, candidate) or parsed.status != "known":
+        if parsed is not None:
+            parsed = _normalize_evidence_state(parsed)
+        if parsed is None or not _valid_evidence(parsed, candidate):
             continue
         grouped.setdefault((parsed.dimension, parsed.subject), []).append(parsed)
     result: dict[tuple[str, str], NormalizedEvidence] = {}
     for key, items in grouped.items():
         first = items[0]
-        if all(evidence_to_mapping(item) == evidence_to_mapping(first) for item in items[1:]):
+        if any(item.status != "known" for item in items) or any(
+            _comparable_value(item) != _comparable_value(first) for item in items[1:]
+        ):
+            result[key] = _evidence_state(first, "conflicting")
+        else:
             result[key] = first
     return result
 
@@ -506,48 +568,135 @@ def _evidence_from_mapping(raw: object) -> NormalizedEvidence | None:
     if not required.issubset(raw) or any(type(raw[name]) is not str for name in raw):
         return None
     try:
-        return NormalizedEvidence(**raw)
+        value = NormalizedEvidence(**raw)
     except TypeError:
         return None
+    expected = _expected_evidence_keys(value)
+    if expected is None or set(raw) != expected:
+        return None
+    value = _normalize_evidence_state(value)
+    return value if _valid_evidence_contract(value) else None
+
+
+def _expected_evidence_keys(value: NormalizedEvidence) -> set[str] | None:
+    if value.status in {"unknown", "conflicting"}:
+        return _EVIDENCE_COMMON_KEYS
+    if value.status != "known":
+        return None
+    if value.dimension in _TEXT_RULES:
+        return _EVIDENCE_COMMON_KEYS | {"text_value"}
+    if value.dimension == "compensation":
+        return _EVIDENCE_COMMON_KEYS | {
+            "lower_bound", "upper_bound", "unit", "currency", "pay_period",
+        }
+    if value.dimension == "travel":
+        return _EVIDENCE_COMMON_KEYS | {"lower_bound", "upper_bound", "unit"}
+    if value.dimension in _DATE_RULES:
+        return _EVIDENCE_COMMON_KEYS | {"lower_bound", "upper_bound"}
+    return None
+
+
+def _valid_evidence_contract(value: NormalizedEvidence) -> bool:
+    if not isinstance(value, NormalizedEvidence):
+        return False
+    expected = _expected_evidence_keys(value)
+    if expected is None or set(evidence_to_mapping(value)) != expected:
+        return False
+    strings = (
+        value.dimension, value.subject, value.status, value.value_type,
+        value.provenance, value.certainty, value.source, value.source_record_id,
+        value.source_field_hash,
+    )
+    if any(type(item) is not str or not item for item in strings):
+        return False
+    if value.provenance not in {"normalized_candidate", "source_receipt"}:
+        return False
+    if value.certainty not in {"verified", "unverified"}:
+        return False
+    if _HASH.fullmatch(value.source_field_hash) is None:
+        return False
+    allowed = (_TEXT_RULES | _NUMBER_RULES | _DATE_RULES).get(value.dimension, set())
+    if value.subject not in allowed:
+        return False
+    expected_type = "text" if value.dimension in _TEXT_RULES else (
+        "number" if value.dimension in _NUMBER_RULES else "date"
+    )
+    if value.value_type != expected_type:
+        return False
+    if value.status != "known":
+        return True
+    if value.certainty != "verified":
+        return False
+    if value.dimension in _TEXT_RULES:
+        return (
+            type(value.text_value) is str
+            and 0 < len(value.text_value.strip()) <= 280
+        )
+    if value.dimension in _NUMBER_RULES:
+        lower = _decimal(value.lower_bound)
+        upper = _decimal(value.upper_bound)
+        if lower is None or upper is None or lower > upper or lower < 0:
+            return False
+        if value.dimension == "travel":
+            return upper <= 100 and value.unit == "percent"
+        return (
+            value.unit == "money"
+            and value.currency in {"USD", "EUR", "GBP", "CAD"}
+            and value.pay_period in {"year", "month", "week", "hour"}
+        )
+    try:
+        return date.fromisoformat(value.lower_bound or "") <= date.fromisoformat(
+            value.upper_bound or ""
+        )
+    except ValueError:
+        return False
+
+
+def _normalize_evidence_state(value: NormalizedEvidence) -> NormalizedEvidence:
+    if (
+        value.status == "known"
+        and value.value_type == "text"
+        and (
+            not (value.text_value or "").strip()
+            or (value.text_value or "").strip().casefold() in _UNKNOWN_TEXT
+        )
+    ):
+        return _evidence_state(value, "unknown")
+    return value
+
+
+def _evidence_state(value: NormalizedEvidence, status: str) -> NormalizedEvidence:
+    return replace(
+        value,
+        status=status,
+        text_value=None,
+        lower_bound=None,
+        upper_bound=None,
+        unit=None,
+        currency=None,
+        pay_period=None,
+    )
 
 
 def _valid_evidence(value: NormalizedEvidence, candidate: CandidateJob) -> bool:
-    if value.provenance != "source_receipt" or value.certainty != "verified" or value.status not in {"known", "unknown", "conflicting"}:
+    if (
+        not _valid_evidence_contract(value)
+        or value.provenance != "source_receipt"
+        or value.certainty != "verified"
+    ):
         return False
     if (value.source, value.source_record_id, value.source_field_hash) != (
         candidate.source, candidate.source_record_id, candidate.raw_field_hash
     ) or _HASH.fullmatch(value.source_field_hash or "") is None:
         return False
-    allowed = (_TEXT_RULES | _NUMBER_RULES | _DATE_RULES).get(value.dimension, set())
-    if value.subject not in allowed:
-        return False
-    if value.status != "known":
-        return True
-    if value.dimension in _TEXT_RULES:
-        return value.value_type == "text" and isinstance(value.text_value, str) and 0 < len(value.text_value.strip()) <= 280 and not any(
-            (value.lower_bound, value.upper_bound, value.unit, value.currency, value.pay_period)
-        )
-    if value.dimension in _NUMBER_RULES:
-        if value.value_type != "number" or _decimal(value.lower_bound) is None or _decimal(value.upper_bound) is None:
-            return False
-        lower = _decimal(value.lower_bound)
-        upper = _decimal(value.upper_bound)
-        if lower > upper or lower < 0 or (value.dimension == "travel" and upper > 100):
-            return False
-        if value.dimension == "travel":
-            return value.unit == "percent" and value.currency is None and value.pay_period is None
-        return value.unit == "money" and value.currency in {"USD", "EUR", "GBP", "CAD"} and value.pay_period in {"year", "month", "week", "hour"}
-    if value.value_type != "date" or any((value.text_value, value.unit, value.currency, value.pay_period)):
-        return False
-    try:
-        return date.fromisoformat(value.lower_bound or "") <= date.fromisoformat(value.upper_bound or "")
-    except ValueError:
-        return False
+    return True
 
 
 def _select_evidence(source: NormalizedEvidence, supplied: NormalizedEvidence | None) -> NormalizedEvidence:
     if supplied is None:
         return source
+    if supplied.status != "known":
+        return supplied
     if source.status != "known":
         return supplied
     if _comparable_value(source) == _comparable_value(supplied):

@@ -16,6 +16,7 @@ from career_pipeline.criteria import (
     evaluate_hard_filters,
     filter_then_assess,
     load_search_criteria,
+    normalized_evidence_from_mapping,
 )
 from career_pipeline.evaluation import JobAssessment
 from career_pipeline.sources.base import CandidateJob
@@ -153,6 +154,22 @@ class StructuredCriteriaTests(unittest.TestCase):
         self.assertEqual(evaluate_hard_filters(candidate(), criteria(text_rule()), evidence=(conflicting,)).result, "unknown")
         self.assertEqual(evaluate_hard_filters(candidate(), criteria(text_rule()), evidence=(unsupported,)).result, "pass")
 
+    def test_persisted_known_evidence_must_be_verified(self) -> None:
+        raw = {
+            "dimension": "location",
+            "subject": "job_location",
+            "status": "known",
+            "value_type": "text",
+            "provenance": "source_receipt",
+            "certainty": "unverified",
+            "source": "public-search",
+            "source_record_id": "synthetic-criteria-1",
+            "source_field_hash": "a" * 64,
+            "text_value": "Remote",
+        }
+
+        self.assertIsNone(normalized_evidence_from_mapping(raw))
+
     def test_oversized_normalized_text_is_ignored_as_malformed(self) -> None:
         oversized = NormalizedEvidence(
             dimension="location", subject="job_location", status="known",
@@ -169,6 +186,82 @@ class StructuredCriteriaTests(unittest.TestCase):
 
     def test_literal_unknown_source_text_is_unknown(self) -> None:
         self.assertEqual(evaluate_hard_filters(candidate(location="Unknown"), criteria(text_rule())).result, "unknown")
+
+    def test_blank_and_normalized_unknown_text_stay_unknown(self) -> None:
+        normalized_unknown = NormalizedEvidence(
+            dimension="location", subject="job_location", status="known",
+            value_type="text", provenance="source_receipt", certainty="verified",
+            source="public-search", source_record_id="synthetic-criteria-1",
+            source_field_hash="a" * 64, text_value="  Unknown  ",
+        )
+        self.assertEqual(
+            evaluate_hard_filters(candidate(location="   "), criteria(text_rule())).result,
+            "unknown",
+        )
+        self.assertEqual(
+            evaluate_hard_filters(
+                candidate(location="Chicago"), criteria(text_rule()),
+                evidence=(normalized_unknown,),
+            ).result,
+            "unknown",
+        )
+
+    def test_explicit_and_grouped_conflicts_stay_unknown(self) -> None:
+        remote = NormalizedEvidence(
+            dimension="location", subject="job_location", status="known",
+            value_type="text", provenance="source_receipt", certainty="verified",
+            source="public-search", source_record_id="synthetic-criteria-1",
+            source_field_hash="a" * 64, text_value="Remote",
+        )
+        boston = replace(remote, text_value="Boston")
+        explicit = replace(remote, status="conflicting", text_value=None)
+        failing_source = candidate(location="Chicago")
+        for supplied in ((remote, boston), (explicit,)):
+            with self.subTest(supplied=supplied):
+                self.assertEqual(
+                    evaluate_hard_filters(
+                        failing_source, criteria(text_rule()), evidence=supplied
+                    ).result,
+                    "unknown",
+                )
+
+    def test_numeric_and_date_evidence_reject_free_form_variant_fields(self) -> None:
+        travel_rule = numeric_rule(
+            criterion_id="maximum-travel", dimension="travel",
+            subject="travel_percentage", operator="maximum",
+            reason_code="travel_above_maximum",
+            threshold=ComparableThreshold("25", "percent"),
+        )
+        numeric_with_prose = evidence(
+            dimension="travel", subject="travel_percentage",
+            lower="80", upper="80", unit="percent",
+            text_value="Private synthetic profile details",
+        )
+        date_with_prose = NormalizedEvidence(
+            dimension="timing", subject="required_start_date", status="known",
+            value_type="date", provenance="source_receipt", certainty="verified",
+            source="public-search", source_record_id="synthetic-criteria-1",
+            source_field_hash="a" * 64, lower_bound="2026-01-01",
+            upper_bound="2026-01-01", text_value="Private synthetic profile details",
+        )
+        date_rule = CriteriaRule(
+            criterion_id="earliest-start-date", dimension="timing",
+            subject="required_start_date", classification="hard_exclusion",
+            operator="on_or_after", reason_code="required_start_before_availability",
+            user_confirmed=True, threshold=ComparableThreshold("2027-01-05"),
+        )
+        self.assertEqual(
+            evaluate_hard_filters(
+                candidate(), criteria(travel_rule), evidence=(numeric_with_prose,)
+            ).result,
+            "unknown",
+        )
+        self.assertEqual(
+            evaluate_hard_filters(
+                candidate(), criteria(date_rule), evidence=(date_with_prose,)
+            ).result,
+            "unknown",
+        )
 
     def test_confirmed_mismatch_skips_semantic_assessment(self) -> None:
         calls: list[str] = []

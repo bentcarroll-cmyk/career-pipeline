@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,6 +10,7 @@ from career_pipeline.automation_policy import render_automation
 from career_pipeline.job_store import (
     create_job,
     read_job,
+    reverify_job,
     update_job_status,
     workspace_lock,
 )
@@ -25,6 +27,318 @@ from tests.unit.test_job_store import synthetic_assessment, synthetic_candidate
 
 
 class LifecycleAutomationTests(unittest.TestCase):
+    def test_reverification_does_not_advance_status_decision_freshness(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = create_job(
+                workspace,
+                synthetic_candidate(),
+                synthetic_assessment(),
+                posting_markdown="# Synthetic posting\n",
+                assessment_markdown="# Synthetic assessment\n",
+                occurred_at="2026-09-11T22:00:00Z",
+            )["job_id"]
+            update_job_status(
+                workspace,
+                job_id,
+                "applied",
+                occurred_at="2026-09-11T22:01:00Z",
+            )
+            reverify_job(
+                workspace,
+                job_id,
+                replace(
+                    synthetic_candidate(),
+                    verified_at="2026-09-11T22:10:00Z",
+                    raw_field_hash="b" * 64,
+                ),
+                synthetic_assessment(),
+                posting_markdown="# Updated synthetic posting\n",
+                assessment_markdown="# Updated synthetic assessment\n",
+                occurred_at="2026-09-11T22:10:00Z",
+            )
+
+            result = reconcile_lifecycle_evidence(
+                workspace,
+                LifecycleEvidence(
+                    "google-calendar",
+                    "synthetic-interview-before-reverification",
+                    "2026-09-11T22:05:00Z",
+                    "Example Cooperative",
+                    "Director of Operations",
+                    "SYN-601",
+                    "interview_invitation",
+                ),
+                enabled_sources=("google-calendar",),
+            )
+
+            self.assertEqual(result.decision.action, "apply_update")
+            self.assertEqual(read_job(workspace, job_id)["status"], "interviewing")
+
+    def test_same_target_observation_protects_against_older_conflicting_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = create_job(
+                workspace,
+                synthetic_candidate(),
+                synthetic_assessment(),
+                posting_markdown="# Synthetic posting\n",
+                assessment_markdown="# Synthetic assessment\n",
+                occurred_at="2026-09-11T22:00:00Z",
+            )["job_id"]
+            update_job_status(
+                workspace,
+                job_id,
+                "applied",
+                occurred_at="2026-09-11T22:01:00Z",
+            )
+            confirmation = reconcile_lifecycle_evidence(
+                workspace,
+                LifecycleEvidence(
+                    "gmail",
+                    "synthetic-newer-same-target-confirmation",
+                    "2026-09-11T22:10:00Z",
+                    "Example Cooperative",
+                    "Director of Operations",
+                    "SYN-601",
+                    "application_confirmation",
+                ),
+                enabled_sources=("gmail",),
+            )
+            rejection = reconcile_lifecycle_evidence(
+                workspace,
+                LifecycleEvidence(
+                    "gmail",
+                    "synthetic-older-conflicting-rejection",
+                    "2026-09-11T22:05:00Z",
+                    "Example Cooperative",
+                    "Director of Operations",
+                    "SYN-601",
+                    "rejection",
+                ),
+                enabled_sources=("gmail",),
+            )
+
+            self.assertEqual(confirmation.decision.action, "apply_update")
+            self.assertEqual(rejection.decision.action, "needs_review")
+            self.assertEqual(
+                rejection.decision.reason,
+                "canonical_status_newer_than_evidence",
+            )
+            self.assertEqual(read_job(workspace, job_id)["status"], "applied")
+            events = [
+                json.loads(line)
+                for line in (
+                    workspace.jobs / job_id / "events.jsonl"
+                ).read_text().splitlines()
+            ]
+            observations = [
+                event
+                for event in events
+                if event["event_type"] == "lifecycle_status_observed"
+            ]
+            self.assertEqual(len(observations), 1)
+            self.assertEqual(observations[0]["status"], "applied")
+
+    def test_same_target_observation_recovers_after_receipt_crash(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = create_job(
+                workspace,
+                synthetic_candidate(),
+                synthetic_assessment(),
+                posting_markdown="# Synthetic posting\n",
+                assessment_markdown="# Synthetic assessment\n",
+                occurred_at="2026-09-11T22:00:00Z",
+            )["job_id"]
+            update_job_status(
+                workspace,
+                job_id,
+                "applied",
+                occurred_at="2026-09-11T22:01:00Z",
+            )
+            evidence = LifecycleEvidence(
+                "gmail",
+                "synthetic-same-target-receipt-crash",
+                "2026-09-11T22:10:00Z",
+                "Example Cooperative",
+                "Director of Operations",
+                "SYN-601",
+                "application_confirmation",
+            )
+
+            with patch(
+                "career_pipeline.reconciliation.atomic_write_json",
+                side_effect=OSError("synthetic same-target receipt interruption"),
+            ):
+                with self.assertRaises(OSError):
+                    reconcile_lifecycle_evidence(
+                        workspace,
+                        evidence,
+                        enabled_sources=("gmail",),
+                    )
+            update_job_status(
+                workspace,
+                job_id,
+                "not_pursuing",
+                occurred_at="2026-09-11T22:20:00Z",
+                metadata={"reason_code": "synthetic_user_decision"},
+            )
+
+            replay = reconcile_lifecycle_evidence(
+                workspace,
+                evidence,
+                enabled_sources=("gmail",),
+            )
+
+            self.assertEqual(replay.decision.action, "apply_update")
+            self.assertEqual(replay.decision.target_status, "applied")
+            self.assertEqual(read_job(workspace, job_id)["status"], "not_pursuing")
+            receipt = json.loads(replay.receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["observed_at"], "2026-09-11T22:10:00Z")
+            events = [
+                json.loads(line)
+                for line in (
+                    workspace.jobs / job_id / "events.jsonl"
+                ).read_text().splitlines()
+            ]
+            matching = [
+                event
+                for event in events
+                if event.get("metadata", {}).get("source_receipt_hash")
+                == evidence_receipt_hash(evidence)
+            ]
+            self.assertEqual(len(matching), 1)
+            self.assertEqual(matching[0]["event_type"], "lifecycle_status_observed")
+
+    def test_semantically_contradictory_receipts_fail_before_dedup(self) -> None:
+        cases = {
+            "wrong_target": {"target_status": "closed"},
+            "unsupported_event": {"event_class": "newsletter"},
+            "apply_review_reason": {
+                "reason": "status_transition_requires_review"
+            },
+            "invalid_observed_at": {"observed_at": "not-a-time"},
+            "review_with_apply_reason": {
+                "action": "needs_review",
+                "reason": "exact_unambiguous_evidence",
+            },
+            "matched_review_reason_labeled_ignore": {
+                "action": "ignore",
+                "reason": "status_transition_requires_review",
+            },
+            "unmatched_review_reason_labeled_ignore": {
+                "action": "ignore",
+                "job_id": None,
+                "target_status": None,
+                "reason": "exact_role_match_required",
+            },
+        }
+        for case, changes in cases.items():
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as raw:
+                workspace = create_workspace(Path(raw) / "Synthetic-Career")
+                job_id = create_job(
+                    workspace,
+                    synthetic_candidate(),
+                    synthetic_assessment(),
+                    posting_markdown="# Synthetic posting\n",
+                    assessment_markdown="# Synthetic assessment\n",
+                    occurred_at="2026-09-11T22:00:00Z",
+                )["job_id"]
+                evidence = LifecycleEvidence(
+                    "gmail",
+                    f"synthetic-semantic-receipt-{case}",
+                    "2026-09-11T22:05:00Z",
+                    "Example Cooperative",
+                    "Director of Operations",
+                    "SYN-601",
+                    "application_confirmation",
+                )
+                receipt_hash = evidence_receipt_hash(evidence)
+                receipt_path = (
+                    workspace.runs
+                    / "lifecycle"
+                    / f"receipt-{receipt_hash[:20]}.json"
+                )
+                receipt = minimal_receipt(
+                    evidence,
+                    LifecycleDecision(
+                        "apply_update",
+                        job_id=job_id,
+                        target_status="applied",
+                        reason="exact_unambiguous_evidence",
+                    ),
+                )
+                receipt.update(changes)
+                receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+                before = receipt_path.read_bytes()
+
+                with self.assertRaises(LifecycleReconciliationError):
+                    reconcile_lifecycle_evidence(
+                        workspace,
+                        evidence,
+                        enabled_sources=("gmail",),
+                    )
+
+                self.assertEqual(read_job(workspace, job_id)["status"], "new")
+                self.assertEqual(receipt_path.read_bytes(), before)
+
+    def test_legacy_nonactionable_ignore_receipt_does_not_block_later_evidence(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = create_job(
+                workspace,
+                synthetic_candidate(),
+                synthetic_assessment(),
+                posting_markdown="# Synthetic posting\n",
+                assessment_markdown="# Synthetic assessment\n",
+                occurred_at="2026-09-11T22:00:00Z",
+            )["job_id"]
+            legacy_evidence = LifecycleEvidence(
+                "gmail",
+                "synthetic-legacy-newsletter",
+                "2026-09-11T22:01:00Z",
+                "Example Cooperative",
+                "Director of Operations",
+                "SYN-601",
+                "newsletter",
+            )
+            legacy_receipt = minimal_receipt(
+                legacy_evidence,
+                LifecycleDecision(
+                    "ignore",
+                    reason="event_class_not_actionable",
+                ),
+            )
+            legacy_hash = evidence_receipt_hash(legacy_evidence)
+            legacy_path = (
+                workspace.runs
+                / "lifecycle"
+                / f"receipt-{legacy_hash[:20]}.json"
+            )
+            legacy_path.write_text(json.dumps(legacy_receipt), encoding="utf-8")
+            before = legacy_path.read_bytes()
+
+            result = reconcile_lifecycle_evidence(
+                workspace,
+                LifecycleEvidence(
+                    "gmail",
+                    "synthetic-valid-after-legacy-ignore",
+                    "2026-09-11T22:05:00Z",
+                    "Example Cooperative",
+                    "Director of Operations",
+                    "SYN-601",
+                    "application_confirmation",
+                ),
+                enabled_sources=("gmail",),
+            )
+
+            self.assertEqual(result.decision.action, "apply_update")
+            self.assertEqual(read_job(workspace, job_id)["status"], "applied")
+            self.assertEqual(legacy_path.read_bytes(), before)
+
     def test_stale_evidence_preserves_newer_nonterminal_canonical_decision(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace = create_workspace(Path(raw) / "Synthetic-Career")
@@ -137,7 +451,7 @@ class LifecycleAutomationTests(unittest.TestCase):
             self.assertEqual(len(matching_events), 1)
 
     def test_malformed_incomplete_and_conflicting_receipts_fail_closed(self) -> None:
-        cases = ("malformed", "incomplete", "conflicting_hash")
+        cases = ("malformed", "non_object", "incomplete", "conflicting_hash")
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as raw:
                 workspace = create_workspace(Path(raw) / "Synthetic-Career")
@@ -168,6 +482,11 @@ class LifecycleAutomationTests(unittest.TestCase):
                 if case == "malformed":
                     receipt_path.write_text(
                         '{"private": "' + private_marker + '",',
+                        encoding="utf-8",
+                    )
+                elif case == "non_object":
+                    receipt_path.write_text(
+                        json.dumps([private_marker]),
                         encoding="utf-8",
                     )
                 elif case == "incomplete":

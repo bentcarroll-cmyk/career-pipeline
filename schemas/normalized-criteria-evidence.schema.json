@@ -15,7 +15,7 @@
         "source": {"type": "string", "minLength": 1},
         "source_record_id": {"type": "string", "minLength": 1},
         "source_field_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "text_value": {"type": "string", "minLength": 1, "maxLength": 280}
+        "text_value": {"type": "string", "minLength": 1, "maxLength": 280, "pattern": "^.*\\S.*$"}
       },
       "allOf": [{
         "oneOf": [

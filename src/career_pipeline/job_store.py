@@ -115,6 +115,17 @@ def workspace_lock(workspace: WorkspacePaths) -> Iterator[None]:
         os.close(descriptor)
 
 
+@contextmanager
+def workspace_lock_if_needed(workspace: WorkspacePaths) -> Iterator[None]:
+    """Reuse a lock held by this thread, otherwise acquire the workspace lock."""
+    resolved_lock = (workspace.state / ".workspace.lock").resolve()
+    if _HELD_LOCKS.get(resolved_lock) == threading.get_ident():
+        yield
+        return
+    with workspace_lock(workspace):
+        yield
+
+
 def _allocate_job_id_locked(workspace: WorkspacePaths) -> str:
     counter_path = workspace.state / "next-job-id.json"
     try:
@@ -253,7 +264,7 @@ def create_job(
     if not occurred_at:
         raise JobStoreError("occurred_at is required")
     temp_dir: Path | None = None
-    with workspace_lock(workspace):
+    with workspace_lock_if_needed(workspace):
         duplicates = _duplicate_job_ids_locked(workspace, candidate)
         if duplicates:
             raise DuplicateJobError(duplicates)
@@ -545,7 +556,7 @@ def reverify_job(
         raise JobStoreError("only qualifying roles can update a canonical job")
     if not occurred_at:
         raise JobStoreError("occurred_at is required")
-    with workspace_lock(workspace):
+    with workspace_lock_if_needed(workspace):
         current = read_job(workspace, job_id)
         current_identity = (
             requisition_identity(
@@ -737,6 +748,35 @@ def _update_job_status_locked(
         metadata=metadata,
     )
     _commit_job_mutation_locked(workspace, job_id, updated, event)
+    return read_job(workspace, job_id)
+
+
+def _record_lifecycle_status_observation_locked(
+    workspace: WorkspacePaths,
+    job_id: str,
+    *,
+    occurred_at: str,
+    metadata: Mapping[str, object],
+) -> dict[str, object]:
+    """Durably record same-status lifecycle evidence while holding the lock."""
+
+    if _HELD_LOCKS.get(
+        (workspace.state / ".workspace.lock").resolve()
+    ) != threading.get_ident():
+        raise WorkspaceLockedError("workspace mutation lock is required")
+    if not occurred_at:
+        raise JobStoreError("occurred_at is required")
+    current = read_job(workspace, job_id)
+    status = str(current["status"])
+    event = _event(
+        job_id,
+        "lifecycle_status_observed",
+        occurred_at,
+        prior_status=status,
+        status=status,
+        metadata=metadata,
+    )
+    _commit_job_mutation_locked(workspace, job_id, current, event)
     return read_job(workspace, job_id)
 
 

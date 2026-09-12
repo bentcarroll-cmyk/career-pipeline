@@ -5,7 +5,7 @@
   "type": "object",
   "required": [
     "schema_version", "identity", "source_snapshot", "responsibility_evidence", "normalized_evidence",
-    "decision", "filter_result", "reason_codes", "rationale_summary",
+    "filter_decisions", "decision", "filter_result", "reason_codes", "reason_code_count", "rationale_summary",
     "criteria_hash", "readable_criteria_sha256", "assessment_hash"
   ],
   "properties": {
@@ -44,17 +44,22 @@
       "type": "array",
       "items": {"$ref": "normalized-criteria-evidence.schema.json"}
     },
+    "filter_decisions": {
+      "type": "array",
+      "items": {"$ref": "discovery-run.schema.json#/$defs/filterDecision"}
+    },
     "decision": {"enum": ["hard_filter_rejection", "semantic_non_match"]},
     "filter_result": {"enum": ["pass", "unknown", "confirmed_mismatch"]},
     "reason_codes": {
       "type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true,
       "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$"}
     },
+    "reason_code_count": {"type": "integer", "minimum": 1},
     "rationale_summary": {
       "type": "string",
       "minLength": 1,
       "maxLength": 280,
-      "pattern": "^(?:hard_filter_rejection|semantic_non_match):[a-z][a-z0-9_]{2,63}(?:,[a-z][a-z0-9_]{2,63}){0,2}$"
+      "pattern": "^(?:hard_filter_rejection|semantic_non_match):bounded_reason_summary$"
     },
     "criteria_hash": {"oneOf": [{"type": "string", "pattern": "^[0-9a-f]{64}$"}, {"type": "null"}]},
     "readable_criteria_sha256": {"oneOf": [{"type": "string", "pattern": "^[0-9a-f]{64}$"}, {"type": "null"}]},

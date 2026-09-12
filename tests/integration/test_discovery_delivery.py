@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from dataclasses import asdict, replace
 from pathlib import Path
+from unittest.mock import patch
 
 from career_pipeline.checkpoints import DiscoveryState, load_discovery_state
 from career_pipeline.atomic import atomic_write_json
@@ -100,7 +101,11 @@ def install_criteria(workspace, *rules: CriteriaRule) -> SearchCriteria:
         workspace.state / "onboarding-state.json",
         OnboardingState(criteria_hash=readable_hash),
     )
-    approve_workspace_criteria(workspace)
+    approve_workspace_criteria(
+        workspace,
+        expected_readable_sha256=readable_hash,
+        expected_structured_sha256=criteria.structured_sha256,
+    )
     return criteria
 
 
@@ -145,7 +150,7 @@ class DiscoveryDeliveryTests(unittest.TestCase):
             self.assertEqual(receipt["responsibility_evidence"], ["Lead fictional operations."])
             self.assertEqual(
                 receipt["rationale_summary"],
-                "semantic_non_match:semantic_non_match",
+                "semantic_non_match:bounded_reason_summary",
             )
             self.assertNotIn(item.assessment.role_to_profile_fit, receipt_path.read_text(encoding="utf-8"))
             self.assertNotIn(item.assessment.role_to_profile_fit, summary_text)
@@ -170,7 +175,11 @@ class DiscoveryDeliveryTests(unittest.TestCase):
                 OnboardingState(criteria_hash=readable_hash),
             )
 
-            approval = approve_workspace_criteria(workspace)
+            approval = approve_workspace_criteria(
+                workspace,
+                expected_readable_sha256=readable_hash,
+                expected_structured_sha256=criteria.structured_sha256,
+            )
 
             self.assertEqual(
                 approval,
@@ -191,7 +200,70 @@ class DiscoveryDeliveryTests(unittest.TestCase):
 
             readable.write_text("# Changed without renewed approval\n", encoding="utf-8")
             with self.assertRaises(CriteriaError):
-                approve_workspace_criteria(workspace)
+                approve_workspace_criteria(
+                    workspace,
+                    expected_readable_sha256=readable_hash,
+                    expected_structured_sha256=criteria.structured_sha256,
+                )
+
+    def test_approval_helper_cannot_overwrite_a_newer_reviewed_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            older = install_criteria(workspace, location_rule())
+            prior_receipt = (workspace.state / "search-criteria-approval.json").read_bytes()
+            newer = install_criteria(workspace, location_rule(accepted="Example City"))
+            newer_receipt = (workspace.state / "search-criteria-approval.json").read_bytes()
+            self.assertNotEqual(older.structured_sha256, newer.structured_sha256)
+            self.assertNotEqual(prior_receipt, newer_receipt)
+
+            with self.assertRaises(CriteriaError):
+                approve_workspace_criteria(
+                    workspace,
+                    expected_readable_sha256=older.readable_criteria_sha256,
+                    expected_structured_sha256=older.structured_sha256,
+                )
+
+            self.assertEqual(
+                (workspace.state / "search-criteria-approval.json").read_bytes(),
+                newer_receipt,
+            )
+
+    def test_boolean_approval_schema_version_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            criteria = install_criteria(workspace, location_rule())
+            atomic_write_json(
+                workspace.state / "search-criteria-approval.json",
+                {
+                    "schema_version": True,
+                    "readable_criteria_sha256": criteria.readable_criteria_sha256,
+                    "structured_criteria_sha256": criteria.structured_sha256,
+                },
+            )
+            with self.assertRaises(CriteriaError):
+                deliver_reviewed_jobs(
+                    workspace, DiscoveryState(), (reviewed(784),),
+                    occurred_at="2026-09-11T07:00:00Z",
+                )
+
+    def test_approval_helper_rejects_symlinked_onboarding_state(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            criteria = install_criteria(workspace, location_rule())
+            approval_path = workspace.state / "search-criteria-approval.json"
+            prior_approval = approval_path.read_bytes()
+            onboarding = workspace.state / "onboarding-state.json"
+            external = Path(raw) / "onboarding-state.json"
+            onboarding.rename(external)
+            onboarding.symlink_to(external)
+
+            with self.assertRaises(CriteriaError):
+                approve_workspace_criteria(
+                    workspace,
+                    expected_readable_sha256=criteria.readable_criteria_sha256,
+                    expected_structured_sha256=criteria.structured_sha256,
+                )
+            self.assertEqual(approval_path.read_bytes(), prior_approval)
 
     def test_private_prose_reason_code_is_rejected_without_a_run_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -221,6 +293,27 @@ class DiscoveryDeliveryTests(unittest.TestCase):
                     workspace, DiscoveryState(), (item,),
                     occurred_at="2026-09-11T09:00:00Z",
                 )
+
+    def test_duplicate_semantic_reason_codes_are_normalized_in_receipts(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            item = reviewed(772, "non_match")
+            item = replace(
+                item,
+                assessment=replace(
+                    item.assessment,
+                    reason_codes=("semantic_non_match", "semantic_non_match"),
+                ),
+            )
+            outcome = deliver_reviewed_jobs(
+                workspace, DiscoveryState(), (item,),
+                occurred_at="2026-09-11T00:30:00Z",
+            )
+            rejection = json.loads(outcome.run_evidence.read_text())[
+                "rejections"
+            ][0]
+            self.assertEqual(rejection["reason_codes"], ["semantic_non_match"])
+            self.assertEqual(rejection["reason_code_count"], 1)
 
     def test_changed_rules_or_normalized_evidence_change_decision_receipt_identity(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -330,6 +423,228 @@ class DiscoveryDeliveryTests(unittest.TestCase):
                             occurred_at="2026-09-11T16:00:00Z",
                         )
 
+    def test_matching_hash_is_not_enough_for_an_upstream_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            item = reviewed(783, "non_match")
+            malformed = {
+                "identity": {
+                    "source": item.candidate.source,
+                    "source_record_id": item.candidate.source_record_id,
+                },
+                "source_snapshot": {"raw_field_hash": item.candidate.raw_field_hash},
+            }
+            encoded = json.dumps(
+                malformed, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+            reference = (
+                "Runs/discovery/sources/receipt-"
+                + hashlib.sha256(encoded).hexdigest()
+                + ".json"
+            )
+            atomic_write_json(workspace.root / reference, malformed)
+
+            with self.assertRaises(ValueError):
+                deliver_reviewed_jobs(
+                    workspace, DiscoveryState(),
+                    (replace(item, source_receipt_reference=reference),),
+                    occurred_at="2026-09-11T06:00:00Z",
+                )
+
+    def test_numeric_private_prose_is_not_persisted_by_api_or_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace_root = Path(raw) / "Synthetic-Career"
+            workspace = create_workspace(workspace_root)
+            install_criteria(workspace, travel_rule("25"))
+            private = "Private synthetic profile details copied into numeric evidence"
+            item = replace(
+                reviewed(782, "non_match"),
+                criteria_evidence=(replace(travel_evidence(782, "80"), text_value=private),),
+            )
+            api = deliver_reviewed_jobs(
+                workspace, DiscoveryState(), (item,),
+                occurred_at="2026-09-11T05:00:00Z",
+            )
+            api_receipt = workspace.root / json.loads(
+                api.run_evidence.read_text(encoding="utf-8")
+            )["rejections"][0]["evidence_receipt_reference"]
+            self.assertNotIn(private, api_receipt.read_text(encoding="utf-8"))
+
+            payload = Path(raw) / "reviewed-private.json"
+            payload.write_text(json.dumps({"reviewed": [{
+                "candidate": asdict(item.candidate),
+                "assessment": asdict(item.assessment),
+                "posting_markdown": item.posting_markdown,
+                "assessment_markdown": item.assessment_markdown,
+                "criteria_evidence": [asdict(item.criteria_evidence[0])],
+            }]}), encoding="utf-8")
+            root = Path(__file__).resolve().parents[2]
+            cli = subprocess.run([
+                sys.executable, str(root / "scripts" / "plan_discovery.py"),
+                "--workspace", str(workspace_root), "--reviewed", str(payload),
+                "--occurred-at", "2026-09-11T05:30:00Z",
+            ], check=False, capture_output=True, text=True)
+            self.assertEqual(cli.returncode, 0, cli.stdout + cli.stderr)
+            self.assertNotIn(
+                private,
+                (workspace_root / json.loads(cli.stdout)["run_evidence"]).read_text(
+                    encoding="utf-8"
+                ),
+            )
+
+    def test_four_hard_failures_retain_complete_decisions_without_aborting(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            rules = (
+                location_rule(),
+                CriteriaRule(
+                    "workplace-approved", "workplace", "workplace_model",
+                    "hard_exclusion", "one_of", "workplace_model_not_approved",
+                    True, values=("remote",),
+                ),
+                CriteriaRule(
+                    "role-approved", "role", "job_title", "hard_exclusion",
+                    "one_of", "role_title_not_approved", True,
+                    values=("Director",),
+                ),
+                travel_rule("25"),
+            )
+            install_criteria(workspace, *rules)
+            item = replace(
+                reviewed(781), assessment=None,
+                criteria_evidence=(travel_evidence(781, "80"),),
+            )
+            qualifying = replace(
+                reviewed(771),
+                candidate=replace(
+                    candidate(771), location="Remote", workplace_model="remote",
+                    title="Director",
+                ),
+                criteria_evidence=(travel_evidence(771, "10"),),
+            )
+
+            outcome = deliver_reviewed_jobs(
+                workspace, DiscoveryState(), (item, qualifying),
+                occurred_at="2026-09-11T04:00:00Z",
+            )
+
+            run = json.loads(outcome.run_evidence.read_text(encoding="utf-8"))
+            rejection = run["rejections"][0]
+            receipt = json.loads(
+                (workspace.root / rejection["evidence_receipt_reference"]).read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(len(run["filter_outcomes"][0]["decisions"]), 4)
+            self.assertEqual(len(receipt["filter_decisions"]), 4)
+            self.assertEqual(rejection["reason_code_count"], 4)
+            self.assertEqual(len(rejection["reason_codes"]), 3)
+            self.assertEqual(outcome.created_job_ids, ("JOB-000001",))
+
+    def test_receipt_directory_symlinks_are_rejected_for_generated_and_upstream_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            raw_path = Path(raw)
+            for suffix, relative in (
+                ("runs", "Runs"),
+                ("discovery", "Runs/discovery"),
+                ("sources", "Runs/discovery/sources"),
+            ):
+                workspace = create_workspace(raw_path / f"Synthetic-{suffix}")
+                target = workspace.root / relative
+                external_target = raw_path / f"external-{suffix}"
+                if target.exists():
+                    target.rename(external_target)
+                else:
+                    external_target.mkdir()
+                target.symlink_to(external_target, target_is_directory=True)
+                with self.subTest(relative=relative), self.assertRaises(ValueError):
+                    deliver_reviewed_jobs(
+                        workspace, DiscoveryState(), (reviewed(780, "non_match"),),
+                        occurred_at="2026-09-11T03:00:00Z",
+                    )
+
+            workspace = create_workspace(raw_path / "Synthetic-Career")
+            external = raw_path / "external-receipts"
+            external.mkdir()
+            sources = workspace.runs / "discovery" / "sources"
+            sources.symlink_to(external, target_is_directory=True)
+            with self.assertRaises(ValueError):
+                deliver_reviewed_jobs(
+                    workspace, DiscoveryState(), (reviewed(780, "non_match"),),
+                    occurred_at="2026-09-11T03:00:00Z",
+                )
+            self.assertEqual(list(external.iterdir()), [])
+
+            sources.unlink()
+            first = deliver_reviewed_jobs(
+                workspace, DiscoveryState(), (reviewed(779, "non_match"),),
+                occurred_at="2026-09-11T02:00:00Z",
+            )
+            reference = json.loads(first.run_evidence.read_text())[
+                "rejections"
+            ][0]["evidence_receipt_reference"]
+            sources.rename(external / "stored")
+            sources.symlink_to(external / "stored", target_is_directory=True)
+            with self.assertRaises(ValueError):
+                deliver_reviewed_jobs(
+                    workspace, first.state,
+                    (replace(reviewed(779, "non_match"), source_receipt_reference=reference),),
+                    occurred_at="2026-09-11T02:30:00Z",
+                )
+
+    def test_criteria_changes_in_either_direction_abort_before_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            for initial, replacement, number in (
+                ("Example City", "Remote", 778),
+                ("Remote", "Example City", 777),
+            ):
+                workspace = create_workspace(Path(raw) / f"Synthetic-{number}")
+                install_criteria(workspace, location_rule(accepted=initial))
+                original_load = __import__(
+                    "career_pipeline.discovery", fromlist=["load_indexes"]
+                ).load_indexes
+
+                def change_criteria(paths, *, accepted=replacement):
+                    result = original_load(paths)
+                    readable = paths.profile / "Search_Criteria.md"
+                    readable_hash = hashlib.sha256(readable.read_bytes()).hexdigest()
+                    replacement_criteria = SearchCriteria(
+                        "Profile/Search_Criteria.md", readable_hash,
+                        (location_rule(accepted=accepted),),
+                    )
+                    atomic_write_json(
+                        paths.profile / "Search_Criteria.json",
+                        criteria_to_mapping(replacement_criteria),
+                    )
+                    save_onboarding_state(
+                        paths.state / "onboarding-state.json",
+                        OnboardingState(criteria_hash=readable_hash),
+                    )
+                    atomic_write_json(
+                        paths.state / "search-criteria-approval.json",
+                        {
+                            "schema_version": 1,
+                            "readable_criteria_sha256": readable_hash,
+                            "structured_criteria_sha256": replacement_criteria.structured_sha256,
+                        },
+                    )
+                    return result
+
+                with self.subTest(initial=initial, replacement=replacement):
+                    with patch(
+                        "career_pipeline.discovery.load_indexes",
+                        side_effect=change_criteria,
+                    ), self.assertRaises(CriteriaError):
+                        deliver_reviewed_jobs(
+                            workspace, DiscoveryState(),
+                            (replace(reviewed(number), assessment=None),),
+                            occurred_at="2026-09-11T01:00:00Z",
+                        )
+                    self.assertEqual(list(workspace.jobs.iterdir()), [])
+                    self.assertEqual(
+                        list((workspace.runs / "discovery").glob("run-*.json")), []
+                    )
+
     def test_discovery_cli_loads_hash_bound_structured_criteria(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace_root = Path(raw) / "Synthetic-Career"
@@ -405,6 +720,73 @@ class DiscoveryDeliveryTests(unittest.TestCase):
             ], check=False, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(json.loads(result.stdout)["created_job_ids"], ["JOB-000001"])
+
+    def test_discovery_cli_normalizes_blank_unknown_and_group_conflicts(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace_root = Path(raw) / "Synthetic-Career"
+            workspace = create_workspace(workspace_root)
+            install_criteria(workspace, location_rule())
+            reviewed_items = []
+            for number, variant in zip(
+                (776, 775, 774),
+                (
+                    {"status": "unknown"},
+                    {"status": "known", "text_value": "Unknown"},
+                    {"status": "known", "text_value": "   "},
+                ),
+            ):
+                item = replace(
+                    reviewed(number),
+                    candidate=replace(candidate(number), location="Chicago"),
+                )
+                normalized = {
+                    "dimension": "location", "subject": "job_location",
+                    "value_type": "text", "provenance": "source_receipt",
+                    "certainty": "verified", "source": item.candidate.source,
+                    "source_record_id": item.candidate.source_record_id,
+                    "source_field_hash": item.candidate.raw_field_hash,
+                    **variant,
+                }
+                reviewed_items.append({
+                    "candidate": asdict(item.candidate),
+                    "assessment": asdict(item.assessment),
+                    "posting_markdown": item.posting_markdown,
+                    "assessment_markdown": item.assessment_markdown,
+                    "criteria_evidence": [normalized],
+                })
+            conflict_item = replace(
+                reviewed(773), candidate=replace(candidate(773), location="Chicago")
+            )
+            conflict_base = {
+                "dimension": "location", "subject": "job_location",
+                "status": "known", "value_type": "text",
+                "provenance": "source_receipt", "certainty": "verified",
+                "source": conflict_item.candidate.source,
+                "source_record_id": conflict_item.candidate.source_record_id,
+                "source_field_hash": conflict_item.candidate.raw_field_hash,
+            }
+            reviewed_items.append({
+                "candidate": asdict(conflict_item.candidate),
+                "assessment": asdict(conflict_item.assessment),
+                "posting_markdown": conflict_item.posting_markdown,
+                "assessment_markdown": conflict_item.assessment_markdown,
+                "criteria_evidence": [
+                    {**conflict_base, "text_value": "Remote"},
+                    {**conflict_base, "text_value": "Boston"},
+                ],
+            })
+            payload = Path(raw) / "reviewed-unknowns.json"
+            payload.write_text(
+                json.dumps({"reviewed": reviewed_items}), encoding="utf-8"
+            )
+            root = Path(__file__).resolve().parents[2]
+            result = subprocess.run([
+                sys.executable, str(root / "scripts" / "plan_discovery.py"),
+                "--workspace", str(workspace_root), "--reviewed", str(payload),
+                "--occurred-at", "2026-09-11T18:05:00Z",
+            ], check=False, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(len(json.loads(result.stdout)["created_job_ids"]), 4)
 
     def test_hard_filter_rejection_writes_compact_audit_without_allocating_id(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

@@ -51,6 +51,7 @@
           "disposition",
           "filter_result",
           "reason_codes",
+          "reason_code_count",
           "source_receipt_reference",
           "evidence_receipt_reference",
           "criteria_hash",
@@ -70,6 +71,10 @@
             "maxItems": 3,
             "uniqueItems": true,
             "items": {"$ref": "#/$defs/reasonCode"}
+          },
+          "reason_code_count": {
+            "type": "integer",
+            "minimum": 1
           },
           "source_receipt_reference": {"$ref": "#/$defs/receiptReference"},
           "evidence_receipt_reference": {"$ref": "#/$defs/receiptReference"},

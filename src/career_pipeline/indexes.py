@@ -11,7 +11,7 @@ from typing import Mapping
 from .atomic import atomic_write_json, load_json
 from .contracts import WorkspacePaths
 from .dedupe import fallback_identity, requisition_identity
-from .job_store import JobStoreError, read_job, workspace_lock
+from .job_store import JobStoreError, read_job, workspace_lock_if_needed
 
 
 @dataclass(frozen=True)
@@ -111,14 +111,14 @@ def _write_indexes(workspace: WorkspacePaths, indexes: IndexBundle) -> None:
 
 
 def rebuild_indexes(workspace: WorkspacePaths) -> IndexBundle:
-    with workspace_lock(workspace):
+    with workspace_lock_if_needed(workspace):
         indexes = _build_indexes(workspace)
         _write_indexes(workspace, indexes)
         return indexes
 
 
 def load_indexes(workspace: WorkspacePaths) -> IndexBundle:
-    with workspace_lock(workspace):
+    with workspace_lock_if_needed(workspace):
         expected = _build_indexes(workspace)
         try:
             current = IndexBundle(
