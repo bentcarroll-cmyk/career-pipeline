@@ -7,6 +7,7 @@ from pathlib import Path
 
 from career_pipeline.packets import (
     ApplicationManifest,
+    InvalidPacketTransition,
     PacketOptions,
     advance_packet,
     collect_local_artifacts,
@@ -405,6 +406,95 @@ class PacketResumptionTests(unittest.TestCase):
             self.assertEqual(record.version, "v001")
             self.assertEqual(replayed.packets[job_id][-1].stage, "ready")
             self.assertEqual(read_job(workspace, job_id)["status"], "packet_ready")
+
+    def test_superseded_saved_version_cannot_deliver_as_newer_selected_version(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = seed_job(workspace)
+            options = synthetic_packet_options()
+            v1_manifest, v1 = start_packet(
+                workspace,
+                job_id,
+                options,
+                ApplicationManifest(),
+                occurred_at="2026-09-11T20:05:00Z",
+                explicit_request=True,
+            )
+            write_minimal_pdf(workspace.root / v1.resume_pdf, pages=2)
+            hashes = collect_local_artifacts(workspace, v1).hashes
+            v1_manifest = advance_to_saved(v1_manifest, job_id, hashes)
+            persist_manifest(workspace, v1_manifest)
+            combined, v2 = restart_packet(
+                workspace,
+                job_id,
+                options,
+                ApplicationManifest(),
+                occurred_at="2026-09-11T20:06:00Z",
+                explicit_request=True,
+            )
+            self.assertEqual(v2.version, "v002")
+
+            with self.assertRaisesRegex(InvalidPacketTransition, "superseded"):
+                complete_local_delivery(
+                    workspace,
+                    v1_manifest,
+                    job_id,
+                    occurred_at="2026-09-11T20:10:00Z",
+                )
+
+            canonical = read_job(workspace, job_id)
+            self.assertEqual(canonical["application_versions"], [])
+            persisted = load_manifest(
+                workspace.state / "application-manifest.json"
+            )
+            self.assertEqual(persisted, combined)
+            self.assertEqual(persisted.packets[job_id][-1].stage, "selected")
+
+    def test_interleaved_normal_starts_share_one_version_reservation(self) -> None:
+        import career_pipeline.packets as packets_module
+
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = seed_job(workspace)
+            options = synthetic_packet_options()
+            original_update = packets_module.update_job_status
+            nested_result = []
+            interleaved = False
+
+            def interleave_second_start(*args, **kwargs):
+                nonlocal interleaved
+                result = original_update(*args, **kwargs)
+                if not interleaved:
+                    interleaved = True
+                    nested_result.append(
+                        start_packet(
+                            workspace,
+                            job_id,
+                            options,
+                            ApplicationManifest(),
+                            occurred_at="2026-09-11T20:05:01Z",
+                            explicit_request=True,
+                        )[1]
+                    )
+                return result
+
+            with patch.object(
+                packets_module,
+                "update_job_status",
+                side_effect=interleave_second_start,
+            ):
+                manifest, outer = start_packet(
+                    workspace,
+                    job_id,
+                    options,
+                    ApplicationManifest(),
+                    occurred_at="2026-09-11T20:05:00Z",
+                    explicit_request=True,
+                )
+
+            self.assertEqual(outer.version, "v001")
+            self.assertEqual(nested_result[0].version, "v001")
+            self.assertEqual(len(manifest.packets[job_id]), 1)
 
 
 if __name__ == "__main__":

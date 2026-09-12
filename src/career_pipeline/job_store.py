@@ -610,6 +610,7 @@ def record_application_version(
     version: Mapping[str, object],
     *,
     occurred_at: str,
+    expected_latest_packet_version: str | None = None,
 ) -> dict[str, object]:
     required = ("version", "resume_pdf", "artifact_hashes")
     if any(not version.get(field) for field in required):
@@ -640,6 +641,15 @@ def record_application_version(
         ):
             raise JobStoreError("application artifact path is outside the job packet")
     with workspace_lock(workspace):
+        if expected_latest_packet_version is not None:
+            manifest_path = workspace.state / "application-manifest.json"
+            try:
+                packet_records = load_json(manifest_path)["packets"][job_id]
+                latest_packet_version = packet_records[-1]["version"]
+            except (FileNotFoundError, KeyError, IndexError, TypeError, ValueError) as exc:
+                raise JobStoreError("packet version is superseded") from exc
+            if latest_packet_version != expected_latest_packet_version:
+                raise JobStoreError("packet version is superseded")
         current = read_job(workspace, job_id)
         versions = list(current.get("application_versions", ()))
         if not all(isinstance(item, Mapping) for item in versions):

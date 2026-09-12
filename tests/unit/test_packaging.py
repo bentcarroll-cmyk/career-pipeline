@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 import zipfile
+import os
 import subprocess
 import sys
 import shutil
@@ -10,6 +11,7 @@ from pathlib import Path
 
 from career_pipeline.packaging import PackagingError, build_plugin_archive
 from career_pipeline.privacy import scan_tree
+from tests.pdf_helper import write_minimal_pdf
 
 
 class PackagingTests(unittest.TestCase):
@@ -60,6 +62,44 @@ class PackagingTests(unittest.TestCase):
 
             with self.assertRaises(PackagingError):
                 build_plugin_archive(copied, Path(raw) / "dist")
+
+    def test_archive_pdf_verifier_runs_without_site_packages(self) -> None:
+        repository = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as raw:
+            temporary = Path(raw)
+            package = build_plugin_archive(repository, temporary / "dist")
+            extracted = temporary / "installed-plugin"
+            with zipfile.ZipFile(package.archive) as bundle:
+                bundle.extractall(extracted)
+            workspace = temporary / "workspace"
+            version = workspace / "Applications" / "JOB-000001_Synthetic" / "v001"
+            version.mkdir(parents=True)
+            resume = version / "Resume.pdf"
+            write_minimal_pdf(resume, pages=2)
+            script = "\n".join(
+                (
+                    "from pathlib import Path",
+                    "from career_pipeline.packets import PacketRecord, collect_local_artifacts",
+                    "from career_pipeline.workspace import workspace_paths",
+                    f"root = Path({str(workspace)!r})",
+                    "relative = Path('Applications/JOB-000001_Synthetic/v001/Resume.pdf')",
+                    "record = PacketRecord(job_id='JOB-000001', employer='Synthetic', title='Lead', version='v001', version_dir=relative.parent, resume_pdf=relative, cover_letter_pdf=None, working_dir=relative.parent / 'working')",
+                    "result = collect_local_artifacts(workspace_paths(root), record)",
+                    "raise SystemExit(0 if result.valid else 1)",
+                )
+            )
+            environment = dict(os.environ)
+            environment["PYTHONPATH"] = str(extracted / "src")
+
+            result = subprocess.run(
+                [sys.executable, "-S", "-c", script],
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

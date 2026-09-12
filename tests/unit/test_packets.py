@@ -1,4 +1,7 @@
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -416,6 +419,105 @@ class PacketTests(unittest.TestCase):
             self.assertEqual(record.profile_hash, "legacy-profile-hash")
             self.assertIsNone(record.criteria_hash)
             self.assertFalse(record.packet_options["cover_letter_enabled"])
+
+    def test_posting_and_draft_receipts_require_exact_sha256_identities(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = seed_job(workspace)
+            manifest, _ = start_packet(
+                workspace,
+                job_id,
+                synthetic_packet_options(
+                    cover_letter_enabled=True,
+                    cover_letter_pages=1,
+                ),
+                ApplicationManifest(),
+                occurred_at="2026-09-11T20:05:00Z",
+                explicit_request=True,
+            )
+            posting_base = {
+                "posting_url": "https://jobs.example/postings/SYN-601",
+                "application_url": "https://jobs.example/apply/SYN-601",
+            }
+            for bad_hash in ("", "not-a-sha256", "g" * 64):
+                with self.subTest(posting_snapshot_hash=bad_hash):
+                    with self.assertRaisesRegex(
+                        InvalidPacketTransition, "snapshot hash"
+                    ):
+                        advance_packet(
+                            manifest,
+                            job_id,
+                            "posting_verified",
+                            {**posting_base, "posting_snapshot_hash": bad_hash},
+                        )
+
+            posted = advance_packet(
+                manifest,
+                job_id,
+                "posting_verified",
+                {**posting_base, "posting_snapshot_hash": "b" * 64},
+            )
+            invalid_drafts = (
+                {},
+                {"resume": "a" * 64},
+                {"resume": "bad", "cover_letter": "c" * 64},
+                {
+                    "resume": "a" * 64,
+                    "cover_letter": "c" * 64,
+                    "unexpected": "d" * 64,
+                },
+            )
+            for draft_hashes in invalid_drafts:
+                with self.subTest(draft_hashes=draft_hashes):
+                    with self.assertRaisesRegex(
+                        InvalidPacketTransition, "draft hashes"
+                    ):
+                        advance_packet(
+                            posted,
+                            job_id,
+                            "drafted",
+                            {"draft_hashes": draft_hashes},
+                        )
+
+    def test_pdf_structure_validation_works_without_site_packages(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "Synthetic-Career"
+            workspace = create_workspace(root)
+            job_id = seed_job(workspace)
+            _, record = start_packet(
+                workspace,
+                job_id,
+                synthetic_packet_options(),
+                ApplicationManifest(),
+                occurred_at="2026-09-11T20:05:00Z",
+                explicit_request=True,
+            )
+            write_minimal_pdf(workspace.root / record.resume_pdf, pages=2)
+            source_root = Path(__file__).resolve().parents[2] / "src"
+            script = "\n".join(
+                (
+                    "from pathlib import Path",
+                    "from career_pipeline.packets import PacketRecord, collect_local_artifacts",
+                    "from career_pipeline.workspace import workspace_paths",
+                    f"root = Path({str(workspace.root)!r})",
+                    f"relative = Path({record.resume_pdf.as_posix()!r})",
+                    "record = PacketRecord(job_id='JOB-000001', employer='Synthetic', title='Lead', version='v001', version_dir=relative.parent, resume_pdf=relative, cover_letter_pdf=None, working_dir=relative.parent / 'working')",
+                    "result = collect_local_artifacts(workspace_paths(root), record)",
+                    "raise SystemExit(0 if result.valid else 1)",
+                )
+            )
+            environment = dict(os.environ)
+            environment["PYTHONPATH"] = str(source_root)
+
+            result = subprocess.run(
+                [sys.executable, "-S", "-c", script],
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

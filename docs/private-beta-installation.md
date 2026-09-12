@@ -25,6 +25,8 @@ Career Pipeline is a local-first Codex Desktop plugin. Its user workspace is the
 
 5. Start a new Codex task and ask: `Set up my job search.` New tasks pick up newly installed plugin skills.
 
+The packet verifier ships inside the plugin and does not rely on Python packages from the host. It structurally validates final PDFs with classic cross-reference tables and a directly readable catalog and page tree. Encrypted PDFs, cross-reference streams, and compressed object streams fail closed; regenerate those files with a standard PDF export before marking a packet ready.
+
 ## Local data and consent boundaries
 
 During onboarding, choose a workspace outside the plugin directory. Every connector is optional, including Linear. Public ATS sources can support activation when all connectors are declined.

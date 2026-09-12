@@ -85,6 +85,7 @@ class ArtifactVerification:
 
 _UNSAFE = re.compile(r"[^A-Za-z0-9_-]+")
 _UNDERSCORES = re.compile(r"_+")
+_SHA256 = re.compile(r"[a-f0-9]{64}")
 
 
 def _safe_component(value: str) -> str:
@@ -207,6 +208,24 @@ def _record_matches_options(record: PacketRecord, options: PacketOptions) -> boo
     )
 
 
+def _expected_artifact_names(record: PacketRecord) -> frozenset[str]:
+    names = {"resume"}
+    if record.cover_letter_pdf is not None:
+        names.add("cover_letter")
+    return frozenset(names)
+
+
+def _valid_hashes(value: object, expected: frozenset[str]) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and set(value) == expected
+        and all(
+            isinstance(item, str) and _SHA256.fullmatch(item) is not None
+            for item in value.values()
+        )
+    )
+
+
 def _merge_manifests(
     stored: ApplicationManifest,
     incoming: ApplicationManifest,
@@ -278,6 +297,41 @@ def persist_manifest(
         return merged
 
 
+def _delivery_record(
+    workspace: WorkspacePaths,
+    manifest: ApplicationManifest,
+    job_id: str,
+) -> tuple[ApplicationManifest, PacketRecord]:
+    requested = _latest(manifest, job_id)
+    if requested is None:
+        raise InvalidPacketTransition("packet job is not in the manifest")
+    manifest_path = workspace.state / "application-manifest.json"
+    with workspace_lock(workspace):
+        stored = (
+            load_manifest(manifest_path)
+            if manifest_path.exists()
+            else ApplicationManifest()
+        )
+        reconciled = _merge_manifests(stored, manifest)
+        latest = _latest(reconciled, job_id)
+        if latest is None or latest.version != requested.version:
+            raise InvalidPacketTransition(
+                f"packet version {requested.version} is superseded"
+            )
+        return reconciled, latest
+
+
+def _require_delivery_version(
+    manifest: ApplicationManifest,
+    job_id: str,
+    version: str,
+) -> PacketRecord:
+    latest = _latest(manifest, job_id)
+    if latest is None or latest.version != version:
+        raise InvalidPacketTransition(f"packet version {version} is superseded")
+    return latest
+
+
 def start_packet(
     workspace: WorkspacePaths,
     job_id: str,
@@ -337,6 +391,15 @@ def start_packet(
             else ApplicationManifest()
         )
         manifest = _merge_manifests(stored, manifest)
+        current = _latest(manifest, job_id)
+        if current is not None and not restart:
+            if not _record_matches_options(current, options):
+                raise InvalidPacketTransition(
+                    "packet inputs changed; explicit restart required"
+                )
+            save_manifest(manifest_path, manifest)
+            _ensure_packet_directories(workspace, current)
+            return manifest, current
         job = read_job(workspace, job_id)
         employer = _safe_component(str(job["employer"]))
         title = _safe_component(str(job["title"]))
@@ -449,15 +512,21 @@ def _validate_stage_receipt(
             for name in ("posting_url", "application_url")
         ):
             raise InvalidPacketTransition("posting verification needs exact URLs")
-        if record.profile_hash is not None and not isinstance(
-            receipt.get("posting_snapshot_hash"), str
+        snapshot_hash = receipt.get("posting_snapshot_hash")
+        if (
+            not isinstance(snapshot_hash, str)
+            or _SHA256.fullmatch(snapshot_hash) is None
         ):
             raise InvalidPacketTransition(
                 "posting verification needs an exact snapshot hash"
             )
     elif stage == "drafted":
-        if not isinstance(receipt.get("draft_hashes"), Mapping):
-            raise InvalidPacketTransition("drafted stage needs draft hashes")
+        if not _valid_hashes(
+            receipt.get("draft_hashes"), _expected_artifact_names(record)
+        ):
+            raise InvalidPacketTransition(
+                "draft hashes must identify every expected document"
+            )
     elif stage == "quality_checked":
         try:
             quality = QualityReceipt.from_mapping(receipt)
@@ -472,6 +541,18 @@ def _validate_stage_receipt(
                 "quality checks failed: " + ", ".join(failures)
             )
         if record.profile_hash is not None:
+            bindings = receipt.get("bindings")
+            final_pdf_hashes = (
+                bindings.get("final_pdf_hashes")
+                if isinstance(bindings, Mapping)
+                else None
+            )
+            if not _valid_hashes(
+                final_pdf_hashes, _expected_artifact_names(record)
+            ):
+                raise InvalidPacketTransition(
+                    "quality receipt binding does not match packet inputs"
+                )
             expected_bindings = {
                 "profile_hash": record.profile_hash,
                 "criteria_hash": record.criteria_hash,
@@ -484,24 +565,18 @@ def _validate_stage_receipt(
                 "draft_hashes": dict(
                     record.receipts.get("drafted", {}).get("draft_hashes", {})
                 ),
-                "final_pdf_hashes": dict(
-                    receipt.get("bindings", {}).get("final_pdf_hashes", {})
-                )
-                if isinstance(receipt.get("bindings"), Mapping)
-                else {},
+                "final_pdf_hashes": dict(final_pdf_hashes),
             }
-            if not isinstance(receipt.get("bindings"), Mapping) or dict(
-                receipt["bindings"]
-            ) != expected_bindings or not expected_bindings["final_pdf_hashes"]:
+            if dict(bindings) != expected_bindings:
                 raise InvalidPacketTransition(
                     "quality receipt binding does not match packet inputs"
                 )
     elif stage == "saved":
         hashes = receipt.get("artifact_hashes")
-        if not isinstance(hashes, Mapping) or "resume" not in hashes:
-            raise InvalidPacketTransition("saved stage needs artifact hashes")
-        if record.cover_letter_pdf is not None and "cover_letter" not in hashes:
-            raise InvalidPacketTransition("cover letter hash is required")
+        if not _valid_hashes(hashes, _expected_artifact_names(record)):
+            raise InvalidPacketTransition(
+                "saved stage needs exact artifact hashes"
+            )
         quality_bindings = record.receipts.get("quality_checked", {}).get("bindings")
         if isinstance(quality_bindings, Mapping) and dict(
             quality_bindings.get("final_pdf_hashes", {})
@@ -549,13 +624,116 @@ def _artifact_paths(record: PacketRecord) -> dict[str, Path]:
 
 
 def _pdf_pages(path: Path) -> int:
-    try:
-        from pypdf import PdfReader
+    return _parse_classic_pdf(path.read_bytes())
 
-        reader = PdfReader(str(path), strict=True)
-        pages = len(reader.pages)
-    except Exception as exc:
-        raise ValueError("PDF parser rejected the file") from exc
+
+def _pdf_line(data: bytes, position: int) -> tuple[bytes, int]:
+    end = data.find(b"\n", position)
+    if end < 0:
+        return data[position:].rstrip(b"\r"), len(data)
+    return data[position:end].rstrip(b"\r"), end + 1
+
+
+def _parse_classic_pdf(data: bytes) -> int:
+    """Validate a classic-xref PDF and return its traversed page count."""
+    if re.match(rb"%PDF-[12]\.[0-9](?:\r?\n|\r)", data) is None:
+        raise ValueError("PDF header is invalid")
+    tail = re.search(rb"startxref\s+([0-9]+)\s+%%EOF\s*$", data[-4096:])
+    if tail is None:
+        raise ValueError("PDF trailer is invalid")
+    xref_offset = int(tail.group(1))
+    if xref_offset < 0 or data[xref_offset : xref_offset + 4] != b"xref":
+        raise ValueError("PDF xref offset is invalid")
+
+    position = xref_offset
+    line, position = _pdf_line(data, position)
+    if line != b"xref":
+        raise ValueError("PDF xref table is invalid")
+    active: dict[tuple[int, int], int] = {}
+    while True:
+        line, position = _pdf_line(data, position)
+        if line == b"trailer":
+            break
+        section = re.fullmatch(rb"([0-9]+)\s+([0-9]+)", line)
+        if section is None:
+            raise ValueError("PDF xref section is invalid")
+        first, count = (int(value) for value in section.groups())
+        if count < 1:
+            raise ValueError("PDF xref section is empty")
+        for number in range(first, first + count):
+            entry, position = _pdf_line(data, position)
+            parsed = re.fullmatch(
+                rb"([0-9]{10})\s+([0-9]{5})\s+([fn])\s*", entry
+            )
+            if parsed is None:
+                raise ValueError("PDF xref entry is invalid")
+            if parsed.group(3) == b"n":
+                active[(number, int(parsed.group(2)))] = int(parsed.group(1))
+
+    trailer_end = data.find(b"startxref", position)
+    if trailer_end < 0:
+        raise ValueError("PDF trailer is incomplete")
+    trailer = data[position:trailer_end]
+    if re.search(rb"/Encrypt\b", trailer):
+        raise ValueError("encrypted PDFs are not supported")
+    root_match = re.search(rb"/Root\s+([0-9]+)\s+([0-9]+)\s+R\b", trailer)
+    if root_match is None:
+        raise ValueError("PDF root is missing")
+    root_ref = (int(root_match.group(1)), int(root_match.group(2)))
+
+    objects: dict[tuple[int, int], bytes] = {}
+    for reference, offset in active.items():
+        if not 0 <= offset < len(data):
+            raise ValueError("PDF object offset is invalid")
+        header = re.match(rb"([0-9]+)\s+([0-9]+)\s+obj\b", data[offset:])
+        if header is None or (
+            int(header.group(1)), int(header.group(2))
+        ) != reference:
+            raise ValueError("PDF xref does not identify its object")
+        body_start = offset + header.end()
+        body_end = data.find(b"endobj", body_start)
+        if body_end < 0:
+            raise ValueError("PDF object is incomplete")
+        objects[reference] = data[body_start:body_end]
+
+    root = objects.get(root_ref)
+    if root is None or re.search(rb"/Type\s*/Catalog\b", root) is None:
+        raise ValueError("PDF catalog is invalid")
+    pages_match = re.search(rb"/Pages\s+([0-9]+)\s+([0-9]+)\s+R\b", root)
+    if pages_match is None:
+        raise ValueError("PDF page tree is missing")
+    pages_ref = (int(pages_match.group(1)), int(pages_match.group(2)))
+
+    def count_pages(reference: tuple[int, int], visiting: set[tuple[int, int]]) -> int:
+        if reference in visiting:
+            raise ValueError("PDF page tree contains a cycle")
+        body = objects.get(reference)
+        if body is None:
+            raise ValueError("PDF page tree references a missing object")
+        if re.search(rb"/Type\s*/Page(?!s)\b", body):
+            return 1
+        if re.search(rb"/Type\s*/Pages\b", body) is None:
+            raise ValueError("PDF page tree node is invalid")
+        kids = re.search(rb"/Kids\s*\[(.*?)\]", body, re.DOTALL)
+        declared = re.search(rb"/Count\s+([0-9]+)\b", body)
+        if kids is None or declared is None:
+            raise ValueError("PDF pages node is incomplete")
+        references = [
+            (int(number), int(generation))
+            for number, generation in re.findall(
+                rb"([0-9]+)\s+([0-9]+)\s+R\b", kids.group(1)
+            )
+        ]
+        if not references:
+            raise ValueError("PDF pages node has no children")
+        visiting.add(reference)
+        actual = sum(count_pages(child, visiting) for child in references)
+        visiting.remove(reference)
+        if actual != int(declared.group(1)):
+            raise ValueError("PDF page count does not match its tree")
+        return actual
+
+    pages = count_pages(pages_ref, set())
     if pages < 1:
         raise ValueError("PDF has no pages")
     return pages
@@ -657,9 +835,8 @@ def complete_local_delivery(
     *,
     occurred_at: str,
 ) -> ApplicationManifest:
-    record = _latest(manifest, job_id)
-    if record is None:
-        raise InvalidPacketTransition("packet job is not in the manifest")
+    manifest, record = _delivery_record(workspace, manifest, job_id)
+    delivery_version = record.version
     if record.stage not in {"saved", "local_verified", "ready"}:
         raise InvalidPacketTransition("packet must be saved before local delivery")
     verification = verify_local_artifacts(workspace, record)
@@ -675,8 +852,7 @@ def complete_local_delivery(
             {"verified": True, "artifact_hashes": dict(verification.hashes)},
         )
         manifest = persist_manifest(workspace, manifest)
-        record = _latest(manifest, job_id)
-        assert record is not None
+        record = _require_delivery_version(manifest, job_id, delivery_version)
     delivery_receipt = {
         "version": record.version,
         "resume_pdf": record.resume_pdf.as_posix(),
@@ -687,12 +863,20 @@ def complete_local_delivery(
         ),
         "artifact_hashes": dict(verification.hashes),
     }
-    record_application_version(
-        workspace,
-        job_id,
-        delivery_receipt,
-        occurred_at=occurred_at,
-    )
+    try:
+        record_application_version(
+            workspace,
+            job_id,
+            delivery_receipt,
+            occurred_at=occurred_at,
+            expected_latest_packet_version=delivery_version,
+        )
+    except JobStoreError as exc:
+        if str(exc) == "packet version is superseded":
+            raise InvalidPacketTransition(
+                f"packet version {delivery_version} is superseded"
+            ) from exc
+        raise
     load_indexes(workspace)
     if record.stage == "ready":
         return persist_manifest(workspace, manifest)
