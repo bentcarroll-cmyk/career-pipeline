@@ -31,7 +31,7 @@ PUBLIC_DISCOVERY_SOURCES = frozenset(
 DISCOVERY_ACTIONS = {
     "indeed": frozenset({"job_search", "search_jobs"}),
     "linkedin": frozenset({"job_search", "search_jobs"}),
-    "firecrawl": frozenset({"search", "web_search", "page_extract"}),
-    "browser": frozenset({"job_search", "search_jobs", "web_search", "page_extract"}),
+    "firecrawl": frozenset({"search", "web_search"}),
+    "browser": frozenset({"job_search", "search_jobs", "web_search"}),
     "usajobs": frozenset({"job_search", "search_jobs", "search"}),
 }

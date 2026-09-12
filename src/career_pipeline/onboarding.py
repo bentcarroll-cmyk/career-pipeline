@@ -149,6 +149,7 @@ def load_onboarding_state(path: Path) -> OnboardingState:
         or len(set(completed)) != len(completed)
         or not isinstance(raw_connectors, Mapping)
         or not isinstance(raw_receipts, Mapping)
+        or tuple(completed) != STAGES[: STAGES.index(stage)]
     ):
         raise ValueError("onboarding state is invalid")
     if any(

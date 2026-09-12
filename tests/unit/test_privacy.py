@@ -80,6 +80,36 @@ class PrivacyScanTests(unittest.TestCase):
             [Finding("credentials.json", 0, "credential-bearing-file")],
         )
 
+    def test_scan_flags_common_sensitive_file_names_and_keystores(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            for name in (
+                ".env",
+                ".credentials",
+                ".secrets",
+                "id_rsa",
+                "id_ed25519",
+                "application.keystore",
+                "release.jks",
+            ):
+                (root / name).write_text("synthetic", encoding="utf-8")
+
+            findings = scan_tree(root)
+
+        self.assertEqual(
+            {finding.path for finding in findings},
+            {
+                ".env",
+                ".credentials",
+                ".secrets",
+                "id_rsa",
+                "id_ed25519",
+                "application.keystore",
+                "release.jks",
+            },
+        )
+        self.assertTrue(all(finding.rule == "sensitive-file-name" for finding in findings))
+
 
 if __name__ == "__main__":
     unittest.main()

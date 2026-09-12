@@ -130,13 +130,16 @@ def check_readiness(
         else:
             try:
                 receipt = load_source_resume_receipt(receipt_workspace)
-                resume_stat = receipt.destination.lstat()
-                if receipt.destination.is_symlink() or not stat.S_ISREG(resume_stat.st_mode):
-                    failures.append("resume_not_regular_file")
-                elif resume_stat.st_size != receipt.size:
-                    failures.append("resume_size_mismatch")
-                elif hashlib.sha256(receipt.destination.read_bytes()).hexdigest() != receipt.sha256:
-                    failures.append("resume_hash_mismatch")
+                if len(resumes) != 1 or receipt.destination != resumes[0]:
+                    failures.append("resume_receipt_destination_mismatch")
+                else:
+                    resume_stat = receipt.destination.lstat()
+                    if receipt.destination.is_symlink() or not stat.S_ISREG(resume_stat.st_mode):
+                        failures.append("resume_not_regular_file")
+                    elif resume_stat.st_size != receipt.size:
+                        failures.append("resume_size_mismatch")
+                    elif hashlib.sha256(receipt.destination.read_bytes()).hexdigest() != receipt.sha256:
+                        failures.append("resume_hash_mismatch")
             except (OSError, ValueError, WorkspaceError):
                 failures.append("resume_receipt_invalid")
         workspace = WorkspacePaths(
@@ -176,7 +179,7 @@ def check_readiness(
         if not isinstance(timezone, str) or not timezone:
             raise ZoneInfoNotFoundError
         ZoneInfo(timezone)
-    except ZoneInfoNotFoundError:
+    except (TypeError, ValueError, ZoneInfoNotFoundError):
         failures.append("timezone_invalid")
 
     schedule = config.get("discovery_schedule")
@@ -189,7 +192,11 @@ def check_readiness(
             schedule.get("frequency") not in {"weekday", "daily", "weekly", "custom"}
             or not isinstance(weekdays, list)
             or not weekdays
-            or any(day not in {"MO", "TU", "WE", "TH", "FR", "SA", "SU"} for day in weekdays)
+            or any(
+                not isinstance(day, str)
+                or day not in {"MO", "TU", "WE", "TH", "FR", "SA", "SU"}
+                for day in weekdays
+            )
             or len(set(weekdays)) != len(weekdays)
             or not isinstance(runs_per_day, int)
             or isinstance(runs_per_day, bool)
@@ -201,6 +208,8 @@ def check_readiness(
 
     if not onboarding.profile_hash or not onboarding.criteria_hash:
         failures.append("profile_not_approved")
+    if onboarding.stage not in {"readiness", "active"}:
+        failures.append("onboarding_not_ready")
     if any(name not in onboarding.connectors for name in CONNECTORS):
         failures.append("connector_decisions_incomplete")
     sources = config.get("enabled_sources")

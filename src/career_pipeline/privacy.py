@@ -39,12 +39,19 @@ _TEXT_RULES = {
 }
 
 _FORBIDDEN_SUFFIXES = {".doc", ".docx", ".pdf"}
-_SKIP_PARTS = {".git", ".venv", "__pycache__", ".pytest_cache"}
+_SKIP_PARTS = {".git", ".venv", "__pycache__", ".pytest_cache", ".superpowers"}
 _USER_DATA_PARTS = {"Applications", "Profile", "Sources", "Runs", "State"}
 _RULE_ALLOWLIST = {
     "src/career_pipeline/privacy.py": {"fixed-user-home", "telemetry-sdk"},
 }
-_SENSITIVE_SUFFIXES = {".key", ".pem", ".p12", ".pfx"}
+_SENSITIVE_SUFFIXES = {".key", ".keystore", ".pem", ".p12", ".pfx", ".jks"}
+_SENSITIVE_NAMES = {
+    ".credentials",
+    ".env",
+    ".secrets",
+    "id_ed25519",
+    "id_rsa",
+}
 _CREDENTIAL_BEARING_NAMES = re.compile(
     r"(?i)^(?:credentials?|secrets?|tokens?)(?:[._-]|$)"
 )
@@ -67,8 +74,8 @@ def _relative_display(path: Path, root: Path) -> str:
 
 
 def _sensitive_file_rule(member: PurePosixPath) -> str | None:
-    if member.suffix.lower() in _SENSITIVE_SUFFIXES:
-        return "sensitive-file-type"
+    if member.name.lower() in _SENSITIVE_NAMES or member.suffix.lower() in _SENSITIVE_SUFFIXES:
+        return "sensitive-file-name"
     if _CREDENTIAL_BEARING_NAMES.match(member.name):
         return "credential-bearing-file"
     return None
@@ -105,14 +112,16 @@ def scan_tree(root: Path) -> list[Finding]:
             findings.append(Finding(relative, 0, "generated-user-data"))
             continue
         file_rule = _sensitive_file_rule(member)
-        if file_rule is not None:
-            findings.append(Finding(relative, 0, file_rule))
-            continue
         if b"\x00" in raw:
+            if file_rule is not None:
+                findings.append(Finding(relative, 0, file_rule))
             continue
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError:
             continue
-        findings.extend(_scan_text(relative, text))
+        text_findings = _scan_text(relative, text)
+        findings.extend(text_findings)
+        if file_rule is not None and not text_findings:
+            findings.append(Finding(relative, 0, file_rule))
     return findings

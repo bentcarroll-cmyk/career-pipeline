@@ -146,6 +146,22 @@ class ReadinessTests(unittest.TestCase):
             self.assertIn("resume_not_regular_file", check_readiness(config, state).failure_codes)
             self.assertEqual(receipt["destination"], "Sources/Resume_Original.txt")
 
+    def test_resume_receipt_must_bind_the_preserved_resume_path(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root, config, state = self._ready_workspace(Path(raw))
+            receipt_path = root / "State" / "source-resume-receipt.json"
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            (root / "Sources" / "other.txt").write_bytes(
+                (root / "Sources" / "Resume_Original.txt").read_bytes()
+            )
+            receipt["destination"] = "Sources/other.txt"
+            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+            self.assertIn(
+                "resume_receipt_destination_mismatch",
+                check_readiness(config, state).failure_codes,
+            )
+
     def test_readiness_uses_persisted_configuration_and_onboarding_state(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root, config, state = self._ready_workspace(Path(raw))
@@ -210,6 +226,32 @@ class ReadinessTests(unittest.TestCase):
                 check_readiness(invalid_cadence, state).failure_codes,
             )
 
+    def test_malformed_timezone_and_weekday_values_return_failure_codes(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root, config, state = self._ready_workspace(Path(raw))
+            malformed_timezone = {**config, "timezone": []}
+            (root / "State" / "config.json").write_text(
+                json.dumps(malformed_timezone), encoding="utf-8"
+            )
+            self.assertIn(
+                "timezone_invalid", check_readiness(malformed_timezone, state).failure_codes
+            )
+
+            malformed_weekdays = {
+                **config,
+                "discovery_schedule": {
+                    **config["discovery_schedule"],
+                    "weekdays": [["MO"]],
+                },
+            }
+            (root / "State" / "config.json").write_text(
+                json.dumps(malformed_weekdays), encoding="utf-8"
+            )
+            self.assertIn(
+                "discovery_schedule_invalid",
+                check_readiness(malformed_weekdays, state).failure_codes,
+            )
+
     def test_export_or_enrichment_actions_do_not_activate_discovery(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root, config, state = self._ready_workspace(Path(raw))
@@ -230,6 +272,40 @@ class ReadinessTests(unittest.TestCase):
             )
             save_onboarding_state(root / "State" / "onboarding-state.json", state)
             self.assertTrue(check_readiness(searchable, state).ready)
+
+    def test_page_extraction_alone_does_not_activate_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root, _config, state = self._ready_workspace(Path(raw))
+            for connector in ("firecrawl", "browser"):
+                connected = record_connector_decision(
+                    state, connector, "connected", ("page_extract",)
+                )
+                config = self._config(root, [connector])
+                (root / "State" / "config.json").write_text(
+                    json.dumps(config), encoding="utf-8"
+                )
+                save_onboarding_state(root / "State" / "onboarding-state.json", connected)
+
+                self.assertIn(
+                    "no_discovery_source", check_readiness(config, connected).failure_codes
+                )
+
+    def test_onboarding_must_have_reached_readiness_before_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root, config, _state = self._ready_workspace(Path(raw))
+            profile = root / "Profile" / "Career_Profile.md"
+            criteria = root / "Profile" / "Search_Criteria.md"
+            early = OnboardingState.at("privacy")
+            for connector in CONNECTORS:
+                early = record_connector_decision(early, connector, "declined", ())
+            early = record_profile_approval(
+                early,
+                hashlib.sha256(profile.read_bytes()).hexdigest(),
+                hashlib.sha256(criteria.read_bytes()).hexdigest(),
+            )
+            save_onboarding_state(root / "State" / "onboarding-state.json", early)
+
+            self.assertIn("onboarding_not_ready", check_readiness(config, early).failure_codes)
 
 
 if __name__ == "__main__":
