@@ -25,11 +25,16 @@ plus the approved private-repository and friend-sharing recommendations.
 - [x] Release version 0.1.1 consistently in the manifest and Python metadata.
 - [x] Review the diff and run the full suite, compilation, plugin validation,
   privacy scans, package checks, and checksum verification.
-- [ ] Inspect tracked source and history before the initial push; create the
+- [x] Inspect tracked source and history before the initial push; create the
   private personal repository, push main and the release tag, and publish assets.
-- [ ] Read back privacy, branch/tag identity, prerelease assets, and downloaded
+- [x] Read back privacy, branch/tag identity, prerelease assets, and downloaded
   checksum; verify the published tag through a fresh clone and synthetic journey.
-- [ ] Report remaining real-friend installation and feedback observation plainly.
+- [x] Report remaining real-friend installation and feedback observation plainly.
+
+## Result
+
+Published private prerelease v0.1.1. The [verification record](../../reviews/2026-09-12-github-release.md)
+records checks, release identity, and the remaining friend-testing steps.
 
 ## Ownership
 
