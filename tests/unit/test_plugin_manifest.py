@@ -8,6 +8,18 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class PluginManifestTests(unittest.TestCase):
+    def test_marketplace_uses_an_installable_local_plugin_source(self) -> None:
+        marketplace = json.loads(
+            (ROOT / ".agents" / "plugins" / "marketplace.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        self.assertEqual(
+            marketplace["plugins"][0]["source"],
+            {"source": "local", "path": "./"},
+        )
+
     def test_manifest_exposes_exactly_four_skills(self) -> None:
         manifest_path = ROOT / ".codex-plugin" / "plugin.json"
         self.assertTrue(manifest_path.is_file(), "plugin manifest must exist")
