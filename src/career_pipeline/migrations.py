@@ -31,6 +31,7 @@ class MigrationPlan:
     workspace: WorkspacePaths
     from_version: int
     target_version: int
+    state_inventory: tuple[tuple[str, int, str], ...]
     changes: tuple[str, ...]
     confirmation_token: str
     backup_dir: Path
@@ -58,6 +59,19 @@ def plan_migration(
         raise MigrationError("workspace uses an unknown future schema version")
     if from_version < 0:
         raise MigrationError("workspace schema version is invalid")
+    state_inventory = _state_inventory(workspace.state)
+    if state_inventory != _state_inventory(workspace.state):
+        raise MigrationError("workspace state changed while planning migration")
+    config_inventory = next(
+        (entry for entry in state_inventory if entry[0] == "config.json"),
+        None,
+    )
+    if config_inventory != (
+        "config.json",
+        len(raw_bytes),
+        hashlib.sha256(raw_bytes).hexdigest(),
+    ):
+        raise MigrationError("workspace state changed while planning migration")
     changes: list[str] = []
     if from_version < target_version:
         changes.append(f"upgrade_config_to_{target_version}")
@@ -68,9 +82,16 @@ def plan_migration(
     if not (workspace.state / "next-job-id.json").is_file():
         changes.append("initialize_next_job_id")
     changes.append("rebuild_indexes")
-    token = hashlib.sha256(
-        raw_bytes + f"\x00{from_version}\x00{target_version}".encode("ascii")
-    ).hexdigest()[:20]
+    token_payload = json.dumps(
+        {
+            "from_version": from_version,
+            "state_inventory": state_inventory,
+            "target_version": target_version,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    token = hashlib.sha256(token_payload).hexdigest()[:20]
     backup_dir = (
         workspace.state
         / "backups"
@@ -80,6 +101,7 @@ def plan_migration(
         workspace=workspace,
         from_version=from_version,
         target_version=target_version,
+        state_inventory=state_inventory,
         changes=tuple(changes),
         confirmation_token=token,
         backup_dir=backup_dir,
@@ -127,6 +149,23 @@ def _inventory(files: Mapping[Path, Path]) -> dict[str, dict[str, object]]:
     }
 
 
+def _inventory_rows(
+    inventory: Mapping[str, Mapping[str, object]],
+) -> tuple[tuple[str, int, str], ...]:
+    return tuple(
+        (
+            relative,
+            int(metadata["size"]),
+            str(metadata["sha256"]),
+        )
+        for relative, metadata in sorted(inventory.items())
+    )
+
+
+def _state_inventory(state: Path) -> tuple[tuple[str, int, str], ...]:
+    return _inventory_rows(_inventory(_state_files(state)))
+
+
 def _backup_files(backup_dir: Path) -> dict[Path, Path]:
     return {
         path.relative_to(backup_dir): path
@@ -136,7 +175,10 @@ def _backup_files(backup_dir: Path) -> dict[Path, Path]:
     }
 
 
-def _verify_backup(backup_dir: Path) -> dict[Path, Path]:
+def _verify_backup(
+    backup_dir: Path,
+    required_inventory: tuple[tuple[str, int, str], ...] | None = None,
+) -> dict[Path, Path]:
     marker = backup_dir / _BACKUP_COMPLETION_FILE
     try:
         completion = load_json(marker)
@@ -151,12 +193,16 @@ def _verify_backup(backup_dir: Path) -> dict[Path, Path]:
         raise MigrationError("migration backup is incomplete or invalid") from exc
     if actual != expected:
         raise MigrationError("migration backup inventory or hashes do not match")
+    if required_inventory is not None and _inventory_rows(actual) != required_inventory:
+        raise MigrationError("migration backup does not match the migration plan")
     return files
 
 
 def _backup_state(plan: MigrationPlan) -> None:
+    if _state_inventory(plan.workspace.state) != plan.state_inventory:
+        raise MigrationError("migration plan is stale; create a new plan")
     if plan.backup_dir.exists():
-        _verify_backup(plan.backup_dir)
+        _verify_backup(plan.backup_dir, plan.state_inventory)
         return
     backup_parent = plan.backup_dir.parent
     backup_parent.mkdir(parents=True, exist_ok=True)
@@ -171,6 +217,8 @@ def _backup_state(plan: MigrationPlan) -> None:
         if Path(_BACKUP_COMPLETION_FILE) in sources:
             raise MigrationError("workspace state uses a reserved backup file name")
         expected = _inventory(sources)
+        if _inventory_rows(expected) != plan.state_inventory:
+            raise MigrationError("migration plan is stale; create a new plan")
         for relative, source in sorted(sources.items()):
             destination = staging / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -192,7 +240,7 @@ def _backup_state(plan: MigrationPlan) -> None:
         _fsync_directory(staging)
         os.replace(staging, plan.backup_dir)
         _fsync_directory(backup_parent)
-        _verify_backup(plan.backup_dir)
+        _verify_backup(plan.backup_dir, plan.state_inventory)
     finally:
         if staging.exists():
             shutil.rmtree(staging)
@@ -240,7 +288,7 @@ def _migrated_config(
 
 def _restore_state(plan: MigrationPlan) -> None:
     state = plan.workspace.state
-    backup_files = _verify_backup(plan.backup_dir)
+    backup_files = _verify_backup(plan.backup_dir, plan.state_inventory)
     current_files = [
         path
         for path in state.rglob("*")

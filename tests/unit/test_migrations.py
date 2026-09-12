@@ -175,6 +175,38 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(migration_state_bytes(workspace), expected)
             self.assertFalse(plan.backup_dir.exists())
 
+    def test_retry_rejects_non_config_state_changed_after_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            seed_migration_state(workspace)
+            plan = plan_migration(workspace, 2)
+
+            with patch(
+                "career_pipeline.migrations.rebuild_indexes",
+                side_effect=OSError("synthetic first-attempt interruption"),
+            ):
+                with self.assertRaises(MigrationError):
+                    apply_migration(plan, plan.confirmation_token)
+
+            self.assertTrue(plan.backup_dir.is_dir())
+            changed_discovery = b'{"cursor":"newer-synthetic-discovery"}\n'
+            (workspace.state / "discovery-state.json").write_bytes(changed_discovery)
+            expected = migration_state_bytes(workspace)
+
+            with patch(
+                "career_pipeline.migrations.rebuild_indexes",
+                side_effect=OSError("synthetic retry interruption"),
+            ):
+                with self.assertRaises(MigrationError) as caught:
+                    apply_migration(plan, plan.confirmation_token)
+
+            self.assertEqual(migration_state_bytes(workspace), expected)
+            self.assertEqual(
+                (workspace.state / "discovery-state.json").read_bytes(),
+                changed_discovery,
+            )
+            self.assertIn("stale", str(caught.exception))
+
     def test_corrupt_backup_is_not_used_for_restore(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace = create_workspace(Path(raw) / "Synthetic-Career")
