@@ -651,8 +651,6 @@ def record_application_version(
             raise JobStoreError("application version conflicts with canonical history")
         if not same_number:
             versions.append(dict(version))
-        if same_number:
-            return current
         updated = dict(current)
         updated["application_versions"] = versions
         prior_status = str(current["status"])
@@ -662,6 +660,8 @@ def record_application_version(
             else prior_status
         )
         updated["status"] = status
+        if same_number and status == prior_status:
+            return current
         errors = validate_document("job", updated)
         if errors:
             raise JobStoreError(f"updated job is invalid: {errors[0].code}")

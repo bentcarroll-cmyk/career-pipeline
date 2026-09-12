@@ -1,6 +1,5 @@
 import tempfile
 import unittest
-import hashlib
 from dataclasses import replace
 from pathlib import Path
 
@@ -17,6 +16,11 @@ from career_pipeline.packets import (
 from career_pipeline.quality import QualityReceipt
 from career_pipeline.workspace import create_workspace
 from tests.unit.test_job_store import synthetic_assessment, synthetic_candidate
+from tests.pdf_helper import write_minimal_pdf
+from tests.unit.test_packets import (
+    bound_quality_receipt,
+    synthetic_packet_options,
+)
 
 
 def seed_jobs(workspace) -> tuple[str, str]:
@@ -46,26 +50,38 @@ def seed_jobs(workspace) -> tuple[str, str]:
 
 def advance_to_ready(workspace, manifest, job_id):
     record = manifest.packets[job_id][-1]
-    (workspace.root / record.resume_pdf).write_bytes(
-        b"%PDF-1.4\nsynthetic\n%%EOF\n"
+    write_minimal_pdf(workspace.root / record.resume_pdf, pages=2)
+    from career_pipeline.packets import collect_local_artifacts
+
+    artifact_hashes = collect_local_artifacts(workspace, record).hashes
+    manifest = advance_packet(
+        manifest,
+        job_id,
+        "posting_verified",
+        {
+            "posting_url": "https://jobs.example/postings/SYN-PACKET",
+            "application_url": "https://jobs.example/apply/SYN-PACKET",
+            "posting_snapshot_hash": "b" * 64,
+        },
     )
-    artifact_hash = hashlib.sha256(
-        (workspace.root / record.resume_pdf).read_bytes()
-    ).hexdigest()
-    receipts = (
-        (
-            "posting_verified",
-            {
-                "posting_url": "https://jobs.example/postings/SYN-PACKET",
-                "application_url": "https://jobs.example/apply/SYN-PACKET",
-            },
-        ),
-        ("drafted", {"draft_hashes": {"resume": "a" * 64}}),
-        ("quality_checked", QualityReceipt.all_passed(2, None).as_dict()),
-        ("saved", {"artifact_hashes": {"resume": artifact_hash}}),
+    manifest = advance_packet(
+        manifest,
+        job_id,
+        "drafted",
+        {"draft_hashes": {"resume": "a" * 64}},
     )
-    for stage, receipt in receipts:
-        manifest = advance_packet(manifest, job_id, stage, receipt)
+    manifest = advance_packet(
+        manifest,
+        job_id,
+        "quality_checked",
+        bound_quality_receipt(manifest.packets[job_id][-1], artifact_hashes),
+    )
+    manifest = advance_packet(
+        manifest,
+        job_id,
+        "saved",
+        {"artifact_hashes": artifact_hashes},
+    )
     return complete_local_delivery(
         workspace,
         manifest,
@@ -90,7 +106,9 @@ class ImmediatePacketTests(unittest.TestCase):
                 manifest, record = start_packet(
                     workspace,
                     job_id,
-                    PacketOptions(cover_letter_enabled=False),
+                    synthetic_packet_options(
+                        role_instructions=selection.per_role_instructions.get(job_id, ""),
+                    ),
                     manifest,
                     occurred_at="2026-09-11T21:05:00Z",
                     explicit_request=True,
@@ -106,7 +124,7 @@ class ImmediatePacketTests(unittest.TestCase):
             manifest, _ = start_packet(
                 workspace,
                 job_id,
-                PacketOptions(cover_letter_enabled=False),
+                synthetic_packet_options(),
                 ApplicationManifest(),
                 occurred_at="2026-09-11T21:05:00Z",
                 explicit_request=True,
@@ -114,6 +132,7 @@ class ImmediatePacketTests(unittest.TestCase):
             receipt = {
                 "posting_url": "https://jobs.example/postings/SYN-PACKET-1",
                 "application_url": "https://jobs.example/apply/SYN-PACKET-1",
+                "posting_snapshot_hash": "b" * 64,
             }
             once = advance_packet(manifest, job_id, "posting_verified", receipt)
             twice = advance_packet(once, job_id, "posting_verified", receipt)

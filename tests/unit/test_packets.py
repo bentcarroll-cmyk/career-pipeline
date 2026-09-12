@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,7 @@ from career_pipeline.packets import (
     InvalidPacketTransition,
     PacketOptions,
     advance_packet,
+    collect_local_artifacts,
     complete_local_delivery,
     load_manifest,
     start_packet,
@@ -16,6 +18,41 @@ from career_pipeline.packets import (
 from career_pipeline.quality import QualityReceipt
 from career_pipeline.workspace import create_workspace
 from tests.unit.test_job_store import synthetic_assessment, synthetic_candidate
+from tests.pdf_helper import write_minimal_pdf
+
+
+def synthetic_packet_options(**changes):
+    values = {
+        "cover_letter_enabled": False,
+        "resume_pages": 2,
+        "cover_letter_pages": 0,
+        "profile_hash": "profile-hash-v1",
+        "criteria_hash": "criteria-hash-v1",
+        "writing_preferences_hash": "writing-preferences-hash-v1",
+        "role_instructions": "Emphasize synthetic operating evidence.",
+    }
+    values.update(changes)
+    return PacketOptions(**values)
+
+
+def bound_quality_receipt(record, artifact_hashes):
+    receipt = QualityReceipt.all_passed(
+        2,
+        1 if record.cover_letter_pdf is not None else None,
+    ).as_dict()
+    receipt["bindings"] = {
+        "profile_hash": record.profile_hash,
+        "criteria_hash": record.criteria_hash,
+        "writing_preferences_hash": record.writing_preferences_hash,
+        "packet_options": dict(record.packet_options),
+        "role_instructions": record.role_instructions,
+        "posting_snapshot_hash": record.receipts["posting_verified"][
+            "posting_snapshot_hash"
+        ],
+        "draft_hashes": dict(record.receipts["drafted"]["draft_hashes"]),
+        "final_pdf_hashes": dict(artifact_hashes),
+    }
+    return receipt
 
 
 def seed_job(workspace) -> str:
@@ -32,19 +69,35 @@ def seed_job(workspace) -> str:
 
 
 def advance_to_saved(manifest, job_id, artifact_hashes):
-    for stage, receipt in (
-        (
-            "posting_verified",
-            {
-                "posting_url": "https://jobs.example/postings/SYN-601",
-                "application_url": "https://jobs.example/apply/SYN-601",
-            },
-        ),
-        ("drafted", {"draft_hashes": {"resume": "a" * 64}}),
-        ("quality_checked", QualityReceipt.all_passed(2, None).as_dict()),
-        ("saved", {"artifact_hashes": artifact_hashes}),
-    ):
-        manifest = advance_packet(manifest, job_id, stage, receipt)
+    manifest = advance_packet(
+        manifest,
+        job_id,
+        "posting_verified",
+        {
+            "posting_url": "https://jobs.example/postings/SYN-601",
+            "application_url": "https://jobs.example/apply/SYN-601",
+            "posting_snapshot_hash": "b" * 64,
+        },
+    )
+    manifest = advance_packet(
+        manifest,
+        job_id,
+        "drafted",
+        {"draft_hashes": {"resume": "a" * 64}},
+    )
+    record = manifest.packets[job_id][-1]
+    manifest = advance_packet(
+        manifest,
+        job_id,
+        "quality_checked",
+        bound_quality_receipt(record, artifact_hashes),
+    )
+    manifest = advance_packet(
+        manifest,
+        job_id,
+        "saved",
+        {"artifact_hashes": artifact_hashes},
+    )
     return manifest
 
 
@@ -63,14 +116,14 @@ class PacketTests(unittest.TestCase):
             manifest, record = start_packet(
                 workspace,
                 job_id,
-                PacketOptions(cover_letter_enabled=False),
+                synthetic_packet_options(),
                 ApplicationManifest(),
                 occurred_at="2026-09-11T20:05:00Z",
                 explicit_request=True,
             )
             actual_resume = workspace.root / record.resume_pdf
-            actual_resume.write_bytes(b"%PDF-1.4\nsynthetic\n%%EOF\n")
-            verification = verify_local_artifacts(workspace, record)
+            write_minimal_pdf(actual_resume, pages=2)
+            verification = collect_local_artifacts(workspace, record)
             manifest = advance_to_saved(manifest, job_id, verification.hashes)
             complete_local_delivery(
                 workspace,
@@ -90,7 +143,10 @@ class PacketTests(unittest.TestCase):
             manifest, record = start_packet(
                 workspace,
                 job_id,
-                PacketOptions(),
+                synthetic_packet_options(
+                    cover_letter_enabled=True,
+                    cover_letter_pages=1,
+                ),
                 ApplicationManifest(),
                 occurred_at="2026-09-11T20:05:00Z",
                 explicit_request=True,
@@ -113,7 +169,7 @@ class PacketTests(unittest.TestCase):
                 start_packet(
                     workspace,
                     job_id,
-                    PacketOptions(),
+                    synthetic_packet_options(),
                     ApplicationManifest(),
                     occurred_at="2026-09-11T20:05:00Z",
                     explicit_request=False,
@@ -122,7 +178,7 @@ class PacketTests(unittest.TestCase):
                 start_packet(
                     workspace,
                     "JOB-999999",
-                    PacketOptions(),
+                    synthetic_packet_options(),
                     ApplicationManifest(),
                     occurred_at="2026-09-11T20:05:00Z",
                     explicit_request=True,
@@ -135,7 +191,7 @@ class PacketTests(unittest.TestCase):
             manifest, _ = start_packet(
                 workspace,
                 job_id,
-                PacketOptions(cover_letter_enabled=False),
+                synthetic_packet_options(),
                 ApplicationManifest(),
                 occurred_at="2026-09-11T20:05:00Z",
                 explicit_request=True,
@@ -145,6 +201,7 @@ class PacketTests(unittest.TestCase):
             receipt = {
                 "posting_url": "https://jobs.example/postings/SYN-601",
                 "application_url": "https://jobs.example/apply/SYN-601",
+                "posting_snapshot_hash": "b" * 64,
             }
             advanced = advance_packet(manifest, job_id, "posting_verified", receipt)
             repeated = advance_packet(advanced, job_id, "posting_verified", receipt)
@@ -157,7 +214,7 @@ class PacketTests(unittest.TestCase):
             manifest, _ = start_packet(
                 workspace,
                 job_id,
-                PacketOptions(cover_letter_enabled=False),
+                synthetic_packet_options(),
                 ApplicationManifest(),
                 occurred_at="2026-09-11T20:05:00Z",
                 explicit_request=True,
@@ -169,6 +226,7 @@ class PacketTests(unittest.TestCase):
                 {
                     "posting_url": "https://jobs.example/postings/SYN-601",
                     "application_url": "https://jobs.example/apply/SYN-601",
+                    "posting_snapshot_hash": "b" * 64,
                 },
             )
             manifest = advance_packet(
@@ -187,14 +245,14 @@ class PacketTests(unittest.TestCase):
             manifest, record = start_packet(
                 workspace,
                 job_id,
-                PacketOptions(cover_letter_enabled=False),
+                synthetic_packet_options(),
                 ApplicationManifest(),
                 occurred_at="2026-09-11T20:05:00Z",
                 explicit_request=True,
             )
             actual_resume = workspace.root / record.resume_pdf
-            actual_resume.write_bytes(b"%PDF-1.4\nsynthetic\n%%EOF\n")
-            verification = verify_local_artifacts(workspace, record)
+            write_minimal_pdf(actual_resume, pages=2)
+            verification = collect_local_artifacts(workspace, record)
             manifest = advance_to_saved(manifest, job_id, verification.hashes)
             completed = complete_local_delivery(
                 workspace,
@@ -216,6 +274,148 @@ class PacketTests(unittest.TestCase):
                 workspace.state / "application-manifest.json"
             )
             self.assertEqual(persisted.packets[job_id][-1].stage, "ready")
+
+    def test_quality_receipt_must_bind_inputs_drafts_posting_and_final_pdfs(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = seed_job(workspace)
+            manifest, record = start_packet(
+                workspace,
+                job_id,
+                synthetic_packet_options(),
+                ApplicationManifest(),
+                occurred_at="2026-09-11T20:05:00Z",
+                explicit_request=True,
+            )
+            manifest = advance_packet(
+                manifest,
+                job_id,
+                "posting_verified",
+                {
+                    "posting_url": "https://jobs.example/postings/SYN-601",
+                    "application_url": "https://jobs.example/apply/SYN-601",
+                    "posting_snapshot_hash": "b" * 64,
+                },
+            )
+            manifest = advance_packet(
+                manifest,
+                job_id,
+                "drafted",
+                {"draft_hashes": {"resume": "a" * 64}},
+            )
+            write_minimal_pdf(workspace.root / record.resume_pdf, pages=2)
+            artifact_hashes = collect_local_artifacts(workspace, record).hashes
+            receipt = bound_quality_receipt(
+                manifest.packets[job_id][-1], artifact_hashes
+            )
+            receipt["bindings"] = {
+                **receipt["bindings"],
+                "criteria_hash": "wrong-criteria-hash",
+            }
+
+            with self.assertRaisesRegex(InvalidPacketTransition, "quality receipt binding"):
+                advance_packet(manifest, job_id, "quality_checked", receipt)
+
+    def test_ready_packet_verification_checks_recorded_hash_and_pdf_structure(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = seed_job(workspace)
+            manifest, record = start_packet(
+                workspace,
+                job_id,
+                synthetic_packet_options(),
+                ApplicationManifest(),
+                occurred_at="2026-09-11T20:05:00Z",
+                explicit_request=True,
+            )
+            resume = workspace.root / record.resume_pdf
+            write_minimal_pdf(resume, pages=2)
+            collected = collect_local_artifacts(workspace, record)
+            manifest = advance_to_saved(manifest, job_id, collected.hashes)
+            completed = complete_local_delivery(
+                workspace,
+                manifest,
+                job_id,
+                occurred_at="2026-09-11T20:10:00Z",
+            )
+            ready = completed.packets[job_id][-1]
+            self.assertTrue(verify_local_artifacts(workspace, ready).valid)
+
+            write_minimal_pdf(resume, pages=1)
+            modified = verify_local_artifacts(workspace, ready)
+            self.assertFalse(modified.valid)
+            self.assertIn("resume_hash_mismatch", modified.errors)
+            with self.assertRaisesRegex(
+                InvalidPacketTransition, "local artifact checks failed"
+            ):
+                complete_local_delivery(
+                    workspace,
+                    completed,
+                    job_id,
+                    occurred_at="2026-09-11T20:11:00Z",
+                )
+
+            resume.write_bytes(b"%PDF-1.4\nnot a real PDF\n%%EOF\n")
+            malformed = verify_local_artifacts(workspace, ready)
+            self.assertFalse(malformed.valid)
+            self.assertIn("resume_invalid_pdf", malformed.errors)
+
+            resume.unlink()
+            missing = verify_local_artifacts(workspace, ready)
+            self.assertFalse(missing.valid)
+            self.assertIn("resume_missing", missing.errors)
+
+    def test_verification_rejects_unexpected_employer_facing_pdf(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            job_id = seed_job(workspace)
+            manifest, record = start_packet(
+                workspace,
+                job_id,
+                synthetic_packet_options(),
+                ApplicationManifest(),
+                occurred_at="2026-09-11T20:05:00Z",
+                explicit_request=True,
+            )
+            write_minimal_pdf(workspace.root / record.resume_pdf, pages=2)
+            write_minimal_pdf(workspace.root / record.version_dir / "unexpected.pdf")
+            result = collect_local_artifacts(workspace, record)
+            self.assertFalse(result.valid)
+            self.assertIn("unexpected_employer_facing_pdf", result.errors)
+
+    def test_legacy_manifest_without_input_bindings_remains_loadable(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "legacy-manifest.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "packets": {
+                            "JOB-000001": [
+                                {
+                                    "job_id": "JOB-000001",
+                                    "employer": "Synthetic Example",
+                                    "title": "Operations Lead",
+                                    "version": "v001",
+                                    "version_dir": "Applications/JOB-000001_Synthetic/v001",
+                                    "resume_pdf": "Applications/JOB-000001_Synthetic/v001/Resume.pdf",
+                                    "cover_letter_pdf": None,
+                                    "working_dir": "Applications/JOB-000001_Synthetic/v001/working",
+                                    "stage": "selected",
+                                    "receipts": {},
+                                    "profile_hash": "legacy-profile-hash",
+                                }
+                            ]
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            record = load_manifest(path).packets["JOB-000001"][0]
+            self.assertEqual(record.profile_hash, "legacy-profile-hash")
+            self.assertIsNone(record.criteria_hash)
+            self.assertFalse(record.packet_options["cover_letter_enabled"])
 
 
 if __name__ == "__main__":

@@ -38,8 +38,10 @@ from career_pipeline.packets import (
     ApplicationManifest,
     PacketOptions,
     advance_packet,
+    collect_local_artifacts,
     complete_local_delivery,
     load_manifest,
+    restart_packet,
     resume_queue,
     save_manifest,
     start_packet,
@@ -53,7 +55,9 @@ from career_pipeline.reconciliation import (
 from career_pipeline.sources.base import SourceSnapshot
 from career_pipeline.sources.generic import normalize as normalize_generic
 from career_pipeline.sources.greenhouse import normalize as normalize_greenhouse
-from career_pipeline.workspace import create_workspace
+from career_pipeline.workspace import create_workspace, preserve_source_resume
+from tests.pdf_helper import write_minimal_pdf
+from tests.unit.test_packets import bound_quality_receipt, synthetic_packet_options
 
 
 FIXTURES = (
@@ -88,14 +92,11 @@ def _reviewed(candidate, disposition: str = "strong_match") -> ReviewedJob:
 def _finish_packet(workspace, manifest, job_id, occurred_at):
     record = manifest.packets[job_id][-1]
     resume = workspace.root / record.resume_pdf
-    resume.write_bytes(b"%PDF-1.4\nsynthetic resume\n%%EOF\n")
-    artifact_hashes = {"resume": hashlib.sha256(resume.read_bytes()).hexdigest()}
+    write_minimal_pdf(resume, pages=2)
     if record.cover_letter_pdf is not None:
         cover_letter = workspace.root / record.cover_letter_pdf
-        cover_letter.write_bytes(b"%PDF-1.4\nsynthetic letter\n%%EOF\n")
-        artifact_hashes["cover_letter"] = hashlib.sha256(
-            cover_letter.read_bytes()
-        ).hexdigest()
+        write_minimal_pdf(cover_letter, pages=1)
+    artifact_hashes = collect_local_artifacts(workspace, record).hashes
     if record.stage == "selected":
         manifest = advance_packet(
             manifest,
@@ -104,6 +105,7 @@ def _finish_packet(workspace, manifest, job_id, occurred_at):
             {
                 "posting_url": "https://jobs.example/postings/SYNTHETIC",
                 "application_url": "https://jobs.example/apply/SYNTHETIC",
+                "posting_snapshot_hash": "b" * 64,
             },
         )
     if manifest.packets[job_id][-1].stage == "posting_verified":
@@ -118,10 +120,9 @@ def _finish_packet(workspace, manifest, job_id, occurred_at):
             manifest,
             job_id,
             "quality_checked",
-            QualityReceipt.all_passed(
-                2,
-                1 if record.cover_letter_pdf is not None else None,
-            ).as_dict(),
+            bound_quality_receipt(
+                manifest.packets[job_id][-1], artifact_hashes
+            ),
         )
     if manifest.packets[job_id][-1].stage == "quality_checked":
         manifest = advance_packet(
@@ -150,8 +151,9 @@ class PrivateBetaTests(unittest.TestCase):
                 "Synthetic writing preferences\n",
                 encoding="utf-8",
             )
-            resume = workspace.sources / "Resume_Original.txt"
-            resume.write_text("Synthetic source résumé\n", encoding="utf-8")
+            source_resume = Path(raw) / "Synthetic_Resume.txt"
+            source_resume.write_text("Synthetic source résumé\n", encoding="utf-8")
+            resume = preserve_source_resume(source_resume, workspace).destination
 
             onboarding = OnboardingState()
             onboarding = advance_onboarding(onboarding, "workspace", {"approved": True})
@@ -201,6 +203,12 @@ class PrivateBetaTests(unittest.TestCase):
                 "workspace_root": str(workspace.root),
                 "timezone": "America/New_York",
                 "enabled_sources": ["public_ats"],
+                "discovery_schedule": {
+                    "frequency": "weekday",
+                    "weekdays": ["MO", "TU", "WE", "TH", "FR"],
+                    "runs_per_day": 2,
+                    "timezone": "America/New_York",
+                },
                 "paths": {
                     "profile": "Profile",
                     "sources": "Sources",
@@ -222,6 +230,10 @@ class PrivateBetaTests(unittest.TestCase):
                     "cover_letter_pages": 1,
                 },
             }
+            (workspace.state / "config.json").write_text(
+                json.dumps(config), encoding="utf-8"
+            )
+            save_onboarding_state(onboarding_path, onboarding)
             readiness = check_readiness(config, onboarding)
             self.assertTrue(readiness.ready, readiness.failure_codes)
             onboarding = advance_onboarding(
@@ -306,7 +318,7 @@ class PrivateBetaTests(unittest.TestCase):
             manifest, first = start_packet(
                 workspace,
                 "JOB-000001",
-                PacketOptions(cover_letter_enabled=False),
+                synthetic_packet_options(role_instructions=""),
                 manifest,
                 occurred_at="2026-09-11T12:15:00Z",
                 explicit_request=True,
@@ -316,7 +328,11 @@ class PrivateBetaTests(unittest.TestCase):
             manifest, second = start_packet(
                 workspace,
                 "JOB-000002",
-                PacketOptions(cover_letter_enabled=True),
+                synthetic_packet_options(
+                    cover_letter_enabled=True,
+                    cover_letter_pages=1,
+                    role_instructions=selection.per_role_instructions["JOB-000002"],
+                ),
                 manifest,
                 occurred_at="2026-09-11T12:16:00Z",
                 explicit_request=True,
@@ -335,6 +351,7 @@ class PrivateBetaTests(unittest.TestCase):
                 {
                     "posting_url": "https://jobs.example/postings/SYN-PUB-404",
                     "application_url": "https://jobs.example/apply/SYN-PUB-404",
+                    "posting_snapshot_hash": "b" * 64,
                 },
             )
             manifest_path = workspace.state / "application-manifest.json"
@@ -354,10 +371,14 @@ class PrivateBetaTests(unittest.TestCase):
             for record in (first, second):
                 self.assertEqual((workspace.root / record.resume_pdf).parent, workspace.root / record.version_dir)
 
-            manifest, single = start_packet(
+            manifest, single = restart_packet(
                 workspace,
                 "JOB-000001",
-                PacketOptions(cover_letter_enabled=True),
+                synthetic_packet_options(
+                    cover_letter_enabled=True,
+                    cover_letter_pages=1,
+                    role_instructions="",
+                ),
                 manifest,
                 occurred_at="2026-09-11T12:25:00Z",
                 explicit_request=True,
