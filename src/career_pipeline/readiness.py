@@ -67,7 +67,7 @@ def check_readiness(
     if not isinstance(root_value, str) or not Path(root_value).is_dir():
         failures.append("workspace_unavailable")
     else:
-        root = Path(root_value)
+        root = Path(root_value).resolve()
         try:
             persisted_config = load_json(root / "State" / "config.json")
         except (OSError, ValueError):

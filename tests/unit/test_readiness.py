@@ -2,6 +2,7 @@ import tempfile
 import unittest
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -161,6 +162,22 @@ class ReadinessTests(unittest.TestCase):
                 "resume_receipt_destination_mismatch",
                 check_readiness(config, state).failure_codes,
             )
+
+    def test_relative_workspace_root_binds_the_resume_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root, config, state = self._ready_workspace(Path(raw))
+            relative_config = {**config, "workspace_root": root.name}
+            (root / "State" / "config.json").write_text(
+                json.dumps(relative_config), encoding="utf-8"
+            )
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(root.parent)
+                report = check_readiness(relative_config, state)
+            finally:
+                os.chdir(original_cwd)
+
+            self.assertTrue(report.ready, report.failure_codes)
 
     def test_readiness_uses_persisted_configuration_and_onboarding_state(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
