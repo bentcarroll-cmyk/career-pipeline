@@ -26,6 +26,12 @@ Career-Workspace/
 **/Sources/
 **/Runs/
 **/State/
+# Keep the plugin's lowercase source-adapter packages under version control on
+# case-insensitive filesystems where the workspace rules above also match them.
+!src/career_pipeline/sources/
+!src/career_pipeline/sources/**
+!tests/unit/sources/
+!tests/unit/sources/**
 *.doc
 *.docx
 *.pdf

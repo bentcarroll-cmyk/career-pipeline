@@ -18,7 +18,7 @@ from career_pipeline.checkpoints import (
     merge_discovery_state,
 )
 from career_pipeline.criteria import load_search_criteria
-from career_pipeline.discovery import ReviewedJob, deliver_reviewed_jobs
+from career_pipeline.discovery import AssessmentBatchError, ReviewedJob, deliver_reviewed_jobs
 from career_pipeline.evaluation import EvidenceClaim, JobAssessment
 from career_pipeline.sources.base import CandidateJob
 from career_pipeline.workspace import create_workspace
@@ -48,6 +48,8 @@ def _reviewed(path: Path) -> tuple[ReviewedJob, ...]:
                 gaps=tuple(assessment_raw.get("gaps", ())),
                 uncertainties=tuple(assessment_raw.get("uncertainties", ())),
                 reason_codes=tuple(assessment_raw.get("reason_codes", ())),
+                profile_hash=assessment_raw.get("profile_hash"),
+                criteria_hash=assessment_raw.get("criteria_hash"),
             )
             if isinstance(assessment_raw, dict)
             else None
@@ -101,13 +103,17 @@ def main() -> int:
     )
     state_path = workspace.state / "discovery-state.json"
     state = load_discovery_state(state_path) if state_path.exists() else DiscoveryState()
-    outcome = deliver_reviewed_jobs(
-        workspace,
-        state,
-        _reviewed(args.reviewed),
-        occurred_at=args.occurred_at,
-        criteria=criteria,
-    )
+    try:
+        outcome = deliver_reviewed_jobs(
+            workspace,
+            state,
+            _reviewed(args.reviewed),
+            occurred_at=args.occurred_at,
+            criteria=criteria,
+        )
+    except AssessmentBatchError as exc:
+        print(json.dumps({"error": "assessment_batch_invalid", "codes": exc.codes}), file=sys.stderr)
+        return 2
     state = merge_discovery_state(
         workspace,
         outcome.state,

@@ -11,6 +11,18 @@
       "type": "object",
       "additionalProperties": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
     },
+    "identity_records": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["requisition", "fallback"],
+        "properties": {
+          "requisition": {"type": ["string", "null"]},
+          "fallback": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
     "identities": {
       "type": "object",
       "additionalProperties": {

@@ -83,7 +83,7 @@ _JOB_STATUSES = {
     "not_pursuing",
     "closed",
 }
-_DISPOSITIONS = {"strong_match", "worth_considering"}
+_DISPOSITIONS = {"strong_match", "worth_considering", "non_match"}
 
 
 def _validate_job(value: Mapping[str, object]) -> list[ValidationError]:
@@ -112,6 +112,23 @@ def _validate_job(value: Mapping[str, object]) -> list[ValidationError]:
     raw_field_hash = value.get("raw_field_hash")
     if isinstance(raw_field_hash, str) and re.fullmatch(r"[a-f0-9]{64}", raw_field_hash) is None:
         errors.append(_error("content_hash", "raw_field_hash", "must be a SHA-256 hash"))
+    for field in ("assessment_profile_hash", "assessment_criteria_hash"):
+        item = value.get(field)
+        if item is not None and (
+            not isinstance(item, str) or re.fullmatch(r"[a-f0-9]{64}", item) is None
+        ):
+            errors.append(_error("content_hash", field, "must be a SHA-256 hash or null"))
+    assessment_hash = value.get("assessment_hash")
+    if assessment_hash is not None and (
+        not isinstance(assessment_hash, str)
+        or re.fullmatch(r"[a-f0-9]{64}", assessment_hash) is None
+    ):
+        errors.append(_error("content_hash", "assessment_hash", "must be a SHA-256 hash"))
+    assessment_at = value.get("assessment_at")
+    if assessment_at is not None and (
+        not isinstance(assessment_at, str) or not assessment_at.strip()
+    ):
+        errors.append(_error("required_string", "assessment_at", "must be a timestamp"))
     if value.get("disposition") not in _DISPOSITIONS:
         errors.append(
             _error("job_disposition", "disposition", "must be a qualifying disposition")

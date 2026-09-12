@@ -10,8 +10,14 @@ from typing import Mapping
 
 from .atomic import atomic_write_json, load_json
 from .contracts import WorkspacePaths
-from .dedupe import fallback_identity, requisition_identity
+from .dedupe import (
+    OpportunityIdentity,
+    candidate_identity,
+    identity_from_fields,
+    resolve_identity,
+)
 from .job_store import JobStoreError, read_job, workspace_lock_if_needed
+from .sources.base import CandidateJob
 
 
 @dataclass(frozen=True)
@@ -62,17 +68,18 @@ def _backlog_summary(record: Mapping[str, object], record_hash: str) -> dict[str
 
 
 def _identity_keys(record: Mapping[str, object]) -> tuple[str, ...]:
-    requisition = requisition_identity(
+    identity = identity_from_fields(
         str(record["employer"]),
         str(record["requisition_id"]) if record.get("requisition_id") else None,
-    )
-    fallback = fallback_identity(
-        str(record["employer"]),
         str(record["title"]),
         str(record["location"]) if record.get("location") else None,
         str(record["team"]) if record.get("team") else None,
     )
-    return (requisition, fallback) if requisition else (fallback,)
+    return (
+        (identity.requisition, identity.fallback)
+        if identity.requisition
+        else (identity.fallback,)
+    )
 
 
 def _build_indexes(workspace: WorkspacePaths) -> IndexBundle:
@@ -80,10 +87,22 @@ def _build_indexes(workspace: WorkspacePaths) -> IndexBundle:
     source_hash = _source_hash(records)
     identities: dict[str, list[str]] = {}
     record_hashes: dict[str, str] = {}
+    identity_records: dict[str, dict[str, str | None]] = {}
     backlog_jobs: list[dict[str, object]] = []
     for record, record_hash in records:
         job_id = str(record["job_id"])
         record_hashes[job_id] = record_hash
+        identity = identity_from_fields(
+            str(record["employer"]),
+            str(record["requisition_id"]) if record.get("requisition_id") else None,
+            str(record["title"]),
+            str(record["location"]) if record.get("location") else None,
+            str(record["team"]) if record.get("team") else None,
+        )
+        identity_records[job_id] = {
+            "requisition": identity.requisition,
+            "fallback": identity.fallback,
+        }
         backlog_jobs.append(_backlog_summary(record, record_hash))
         for key in _identity_keys(record):
             identities.setdefault(key, []).append(job_id)
@@ -97,6 +116,7 @@ def _build_indexes(workspace: WorkspacePaths) -> IndexBundle:
             "schema_version": 1,
             "source_hash": source_hash,
             "record_hashes": record_hashes,
+            "identity_records": identity_records,
             "identities": {key: value for key, value in sorted(identities.items())},
         },
     )
@@ -144,3 +164,32 @@ def duplicate_job_ids(
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise JobStoreError("deduplication identity is invalid")
     return tuple(value)
+
+
+def resolve_duplicate_job_ids(
+    indexes: IndexBundle,
+    candidate: CandidateJob,
+) -> tuple[tuple[str, ...], bool]:
+    raw = indexes.deduplication.get("identity_records")
+    if not isinstance(raw, Mapping):
+        raise JobStoreError("deduplication identity records are invalid")
+    existing: dict[str, OpportunityIdentity] = {}
+    for job_id, value in raw.items():
+        if (
+            not isinstance(job_id, str)
+            or not isinstance(value, Mapping)
+            or not isinstance(value.get("fallback"), str)
+            or (
+                value.get("requisition") is not None
+                and not isinstance(value.get("requisition"), str)
+            )
+        ):
+            raise JobStoreError("deduplication identity record is invalid")
+        existing[job_id] = OpportunityIdentity(
+            value.get("requisition"), str(value["fallback"])
+        )
+    resolution = resolve_identity(candidate_identity(candidate), existing)
+    return (
+        resolution.matched_ids or resolution.ambiguous_ids,
+        resolution.ambiguous,
+    )

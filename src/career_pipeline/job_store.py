@@ -17,8 +17,13 @@ from typing import Iterator, Mapping
 
 from .atomic import atomic_write_json, atomic_write_text, load_json
 from .contracts import WorkspacePaths
-from .dedupe import candidate_key, fallback_identity, requisition_identity
-from .evaluation import JobAssessment
+from .dedupe import (
+    OpportunityIdentity,
+    candidate_identity,
+    identity_from_fields,
+    resolve_identity,
+)
+from .evaluation import JobAssessment, assessment_content_hash
 from .schema import validate_document
 from .sources.base import CandidateJob
 from .timestamps import TimestampError, parse_instant
@@ -166,6 +171,8 @@ def _build_record(
     job_id: str,
     candidate: CandidateJob,
     assessment: JobAssessment,
+    *,
+    assessment_at: str,
 ) -> dict[str, object]:
     return {
         "schema_version": 1,
@@ -193,6 +200,10 @@ def _build_record(
         "strengths": [asdict(strength) for strength in assessment.strengths],
         "gaps": list(assessment.gaps),
         "uncertainties": list(assessment.uncertainties),
+        "assessment_profile_hash": assessment.profile_hash,
+        "assessment_criteria_hash": assessment.criteria_hash,
+        "assessment_hash": assessment_content_hash(assessment),
+        "assessment_at": assessment_at,
         "deadline": candidate.deadline,
         "recommended_next_action": (
             "Review this verified role and decide whether to request an application packet."
@@ -272,7 +283,12 @@ def create_job(
         final_dir = workspace.jobs / job_id
         if final_dir.exists():
             raise JobStoreError("allocated job folder already exists")
-        record = _build_record(job_id, candidate, assessment)
+        record = _build_record(
+            job_id,
+            candidate,
+            assessment,
+            assessment_at=occurred_at,
+        )
         errors = validate_document("job", record)
         if errors:
             raise JobStoreError(f"canonical job is invalid: {errors[0].code}")
@@ -310,29 +326,20 @@ def _duplicate_job_ids_locked(
     workspace: WorkspacePaths,
     candidate: CandidateJob,
 ) -> tuple[str, ...]:
-    wanted = candidate_key(candidate)
-    duplicates: list[str] = []
+    existing: dict[str, OpportunityIdentity] = {}
     for job_dir in sorted(workspace.jobs.iterdir(), key=lambda path: path.name):
         if not job_dir.is_dir() or _JOB_ID.fullmatch(job_dir.name) is None:
             continue
         record = read_job(workspace, job_dir.name)
-        if candidate.requisition_id:
-            existing = requisition_identity(
-                str(record["employer"]),
-                str(record["requisition_id"])
-                if record.get("requisition_id")
-                else None,
-            )
-        else:
-            existing = fallback_identity(
-                str(record["employer"]),
-                str(record["title"]),
-                str(record["location"]) if record.get("location") else None,
-                str(record["team"]) if record.get("team") else None,
-            )
-        if existing == wanted:
-            duplicates.append(job_dir.name)
-    return tuple(duplicates)
+        existing[job_dir.name] = identity_from_fields(
+            str(record["employer"]),
+            str(record["requisition_id"]) if record.get("requisition_id") else None,
+            str(record["title"]),
+            str(record["location"]) if record.get("location") else None,
+            str(record["team"]) if record.get("team") else None,
+        )
+    resolution = resolve_identity(candidate_identity(candidate), existing)
+    return resolution.matched_ids or resolution.ambiguous_ids
 
 
 def _canonical_job_dir(workspace: WorkspacePaths, job_id: str) -> Path:
@@ -552,26 +559,22 @@ def reverify_job(
     assessment_markdown: str,
     occurred_at: str,
 ) -> ReverificationResult:
-    if assessment.disposition not in {"strong_match", "worth_considering"}:
-        raise JobStoreError("only qualifying roles can update a canonical job")
+    if assessment.disposition not in {"strong_match", "worth_considering", "non_match"}:
+        raise JobStoreError("unsupported canonical reassessment disposition")
     if not occurred_at:
         raise JobStoreError("occurred_at is required")
     with workspace_lock_if_needed(workspace):
         current = read_job(workspace, job_id)
-        current_identity = (
-            requisition_identity(
-                str(current["employer"]),
-                str(current["requisition_id"]),
-            )
-            if current.get("requisition_id")
-            else fallback_identity(
-                str(current["employer"]),
-                str(current["title"]),
-                str(current["location"]) if current.get("location") else None,
-                str(current["team"]) if current.get("team") else None,
-            )
+        current_identity = identity_from_fields(
+            str(current["employer"]),
+            str(current["requisition_id"]) if current.get("requisition_id") else None,
+            str(current["title"]),
+            str(current["location"]) if current.get("location") else None,
+            str(current["team"]) if current.get("team") else None,
         )
-        if candidate_key(candidate) != current_identity:
+        if not resolve_identity(
+            candidate_identity(candidate), {job_id: current_identity}
+        ).matched_ids:
             raise JobStoreError("reverification identity does not match canonical job")
         try:
             current_verified_at = parse_instant(str(current["verified_at"]))
@@ -593,11 +596,7 @@ def reverify_job(
         exact_requisition = bool(
             current.get("requisition_id")
             and candidate.requisition_id
-            and requisition_identity(
-                str(current["employer"]),
-                str(current["requisition_id"]),
-            )
-            == requisition_identity(candidate.employer, candidate.requisition_id)
+            and current_identity.requisition == candidate_identity(candidate).requisition
         )
         stronger_source = _SOURCE_PRIORITY.get(candidate.source, 0) > _SOURCE_PRIORITY.get(
             str(current.get("source", "")), 0
@@ -606,25 +605,90 @@ def reverify_job(
             (same_source and not same_content)
             or (not same_source and exact_requisition and stronger_source)
         )
+        updated = dict(current)
+        file_updates: dict[str, str] = {}
         if replace_evidence:
-            updated = _build_record(job_id, candidate, assessment)
+            fresh = _build_record(
+                job_id,
+                candidate,
+                assessment,
+                assessment_at=occurred_at,
+            )
             for field in (
-                "status",
-                "discovered_at",
-                "paths",
-                "application_versions",
-                "exports",
+                "source_record_id", "employer", "title", "location",
+                "workplace_model", "travel", "compensation_evidence",
+                "posting_url", "application_url", "requisition_id", "team",
+                "posted_at", "updated_at", "source", "verified_at",
+                "verification_status", "raw_field_hash", "deadline",
             ):
-                updated[field] = current[field]
-            file_updates = {
-                "posting.md": posting_markdown,
-                "assessment.md": assessment_markdown,
-            }
-        else:
-            updated = dict(current)
-            file_updates = None
-            if same_source and same_content and evidence_is_current:
-                updated["verified_at"] = candidate.verified_at
+                updated[field] = fresh[field]
+            file_updates["posting.md"] = posting_markdown
+        elif same_source and same_content and evidence_is_current:
+            updated["verified_at"] = candidate.verified_at
+        if current.get("requisition_id") and not candidate.requisition_id:
+            updated["requisition_id"] = current["requisition_id"]
+        elif not current.get("requisition_id") and candidate.requisition_id:
+            updated["requisition_id"] = candidate.requisition_id
+
+        next_assessment_hash = assessment_content_hash(assessment)
+        current_assessment_hash = current.get("assessment_hash")
+        current_assessment_at = current.get("assessment_at") or current.get(
+            "reverified_at"
+        ) or current.get("discovered_at")
+        try:
+            current_assessment_instant = (
+                parse_instant(str(current_assessment_at))
+                if current_assessment_at is not None
+                else None
+            )
+        except TimestampError as exc:
+            raise JobStoreError(
+                "canonical assessment timestamp must be timezone-aware ISO 8601"
+            ) from exc
+        assessment_changed = current_assessment_hash != next_assessment_hash
+        assessment_is_newer = (
+            current_assessment_instant is None
+            or occurred_instant > current_assessment_instant
+            or (
+                occurred_instant == current_assessment_instant
+                and current_assessment_hash is None
+            )
+        )
+        if (
+            assessment_changed
+            and current_assessment_instant is not None
+            and occurred_instant == current_assessment_instant
+            and current_assessment_hash is not None
+        ):
+            raise JobStoreError("assessment version conflicts at the same timestamp")
+        if assessment_changed and assessment_is_newer:
+            updated.update(
+                {
+                    "disposition": assessment.disposition,
+                    "role_to_profile_fit": assessment.role_to_profile_fit,
+                    "strengths": [asdict(strength) for strength in assessment.strengths],
+                    "gaps": list(assessment.gaps),
+                    "uncertainties": list(assessment.uncertainties),
+                    "assessment_profile_hash": assessment.profile_hash,
+                    "assessment_criteria_hash": assessment.criteria_hash,
+                    "assessment_hash": next_assessment_hash,
+                    "assessment_at": occurred_at,
+                    "recommended_next_action": (
+                        "Review this reassessment before further action."
+                        if assessment.disposition == "non_match"
+                        else "Review this verified role and decide whether to request an application packet."
+                    ),
+                }
+            )
+            file_updates["assessment.md"] = assessment_markdown
+        elif (
+            not assessment_changed
+            and (
+                current_assessment_instant is None
+                or occurred_instant > current_assessment_instant
+            )
+        ):
+            updated["assessment_at"] = occurred_at
         updated["reverified_at"] = (
             str(prior_reverified_at)
             if prior_reverified_instant is not None
@@ -635,7 +699,7 @@ def reverify_job(
             sorted(
                 field
                 for field, value in updated.items()
-                if field not in {"reverified_at", "verified_at"}
+                if field not in {"reverified_at", "verified_at", "assessment_at"}
                 and current.get(field) != value
             )
         )
@@ -652,6 +716,10 @@ def reverify_job(
                 "changed_fields": list(changed_fields),
                 "verification_source": candidate.source,
                 "stale_evidence_ignored": not evidence_is_current,
+                "stale_assessment_ignored": assessment_changed
+                and not assessment_is_newer,
+                "prior_assessment_hash": current_assessment_hash,
+                "assessment_hash": updated.get("assessment_hash"),
             },
         )
         _commit_job_mutation_locked(
@@ -659,7 +727,7 @@ def reverify_job(
             job_id,
             updated,
             event,
-            file_updates,
+            file_updates or None,
         )
         return ReverificationResult(read_job(workspace, job_id), changed_fields)
 

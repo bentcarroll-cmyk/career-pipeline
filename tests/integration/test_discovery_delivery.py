@@ -25,7 +25,24 @@ from career_pipeline.job_store import read_job
 from career_pipeline.onboarding import OnboardingState, save_onboarding_state
 from career_pipeline.reporting import discovery_report
 from career_pipeline.sources.base import CandidateJob
-from career_pipeline.workspace import create_workspace
+from career_pipeline.workspace import create_workspace as _create_workspace
+
+
+_PROFILE_TEXT = "# Synthetic career profile\n\n- EV-010: Synthetic operations evidence.\n"
+_CRITERIA_TEXT = "# Approved synthetic criteria\n"
+_PROFILE_HASH = hashlib.sha256(_PROFILE_TEXT.encode()).hexdigest()
+_CRITERIA_HASH = hashlib.sha256(_CRITERIA_TEXT.encode()).hexdigest()
+
+
+def create_workspace(root):
+    workspace = _create_workspace(root)
+    (workspace.profile / "Career_Profile.md").write_text(_PROFILE_TEXT, encoding="utf-8")
+    (workspace.profile / "Search_Criteria.md").write_text(_CRITERIA_TEXT, encoding="utf-8")
+    save_onboarding_state(
+        workspace.state / "onboarding-state.json",
+        OnboardingState(profile_hash=_PROFILE_HASH, criteria_hash=_CRITERIA_HASH),
+    )
+    return workspace
 
 
 def candidate(number: int) -> CandidateJob:
@@ -67,6 +84,8 @@ def reviewed(number: int, disposition: str = "strong_match") -> ReviewedJob:
             strengths=strengths,
             gaps=(),
             uncertainties=("Travel is not stated.",),
+            profile_hash=_PROFILE_HASH,
+            criteria_hash=_CRITERIA_HASH,
         ),
         posting_markdown="# Synthetic posting\n",
         assessment_markdown="# Synthetic assessment\n",
@@ -99,7 +118,7 @@ def install_criteria(workspace, *rules: CriteriaRule) -> SearchCriteria:
     )
     save_onboarding_state(
         workspace.state / "onboarding-state.json",
-        OnboardingState(criteria_hash=readable_hash),
+        OnboardingState(profile_hash=_PROFILE_HASH, criteria_hash=readable_hash),
     )
     approve_workspace_criteria(
         workspace,
@@ -618,7 +637,10 @@ class DiscoveryDeliveryTests(unittest.TestCase):
                     )
                     save_onboarding_state(
                         paths.state / "onboarding-state.json",
-                        OnboardingState(criteria_hash=readable_hash),
+                        OnboardingState(
+                            profile_hash=_PROFILE_HASH,
+                            criteria_hash=readable_hash,
+                        ),
                     )
                     atomic_write_json(
                         paths.state / "search-criteria-approval.json",
@@ -637,7 +659,7 @@ class DiscoveryDeliveryTests(unittest.TestCase):
                     ), self.assertRaises(CriteriaError):
                         deliver_reviewed_jobs(
                             workspace, DiscoveryState(),
-                            (replace(reviewed(number), assessment=None),),
+                            (reviewed(number),),
                             occurred_at="2026-09-11T01:00:00Z",
                         )
                     self.assertEqual(list(workspace.jobs.iterdir()), [])
@@ -939,6 +961,7 @@ class DiscoveryDeliveryTests(unittest.TestCase):
     def test_discovery_cli_persists_source_checkpoint_across_runs(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace_root = Path(raw) / "Synthetic-Career"
+            create_workspace(workspace_root)
             payload_path = Path(raw) / "synthetic-reviewed.json"
             item = reviewed(800)
             payload_path.write_text(

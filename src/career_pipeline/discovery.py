@@ -22,8 +22,15 @@ from .criteria import (
 )
 from .contracts import WorkspacePaths
 from .dedupe import candidate_key
-from .evaluation import JobAssessment
-from .indexes import load_indexes, rebuild_indexes
+from .evaluation import (
+    ApprovedAssessmentInputs,
+    AssessmentApprovalError,
+    JobAssessment,
+    load_approved_assessment_inputs,
+    validate_assessment,
+    validate_assessment_bindings,
+)
+from .indexes import load_indexes, rebuild_indexes, resolve_duplicate_job_ids
 from .job_store import (
     DuplicateJobError,
     create_job,
@@ -51,6 +58,21 @@ class DiscoveryOutcome:
     non_match_keys: tuple[str, ...]
     meaningful_change_job_ids: tuple[str, ...]
     run_evidence: Path
+
+
+class AssessmentBatchError(ValueError):
+    def __init__(self, codes: Sequence[str]):
+        self.codes = tuple(dict.fromkeys(codes))
+        super().__init__("assessment_batch_invalid:" + ",".join(self.codes))
+
+
+@dataclass(frozen=True)
+class _PreparedReview:
+    item: ReviewedJob
+    key: str
+    filter_outcome: HardFilterOutcome
+    canonical_assessment: JobAssessment
+    canonical_assessment_markdown: str
 
 
 def _run_evidence_path(
@@ -93,10 +115,14 @@ def _deliver_reviewed_jobs_locked(
     criteria: SearchCriteria | None,
 ) -> DiscoveryOutcome:
     criteria = resolve_workspace_criteria(workspace, criteria)
-    baseline = load_indexes(workspace)
+    try:
+        approved = load_approved_assessment_inputs(workspace)
+    except AssessmentApprovalError as exc:
+        raise AssessmentBatchError((exc.code,)) from exc
+    prepared = _validate_review_batch(reviewed, criteria, approved)
+    _revalidate_approved_inputs(workspace, approved, criteria)
+    load_indexes(workspace)
     _revalidate_criteria_snapshot(workspace, criteria)
-    raw_identities = baseline.deduplication.get("identities", {})
-    identities = raw_identities if isinstance(raw_identities, dict) else {}
     created: list[str] = []
     duplicates: list[str] = []
     non_matches: list[str] = []
@@ -104,16 +130,13 @@ def _deliver_reviewed_jobs_locked(
     filter_outcomes: list[dict[str, object]] = []
     rejections: list[dict[str, object]] = []
     canonical_jobs = dict(state.canonical_jobs)
-    for item in reviewed:
-        key = candidate_key(item.candidate)
-        filter_outcome = (
-            evaluate_hard_filters(
-                item.candidate,
-                criteria,
-                evidence=item.criteria_evidence,
-            )
-            if criteria is not None
-            else HardFilterOutcome("pass", ())
+    for prepared_item in prepared:
+        item = prepared_item.item
+        key = prepared_item.key
+        filter_outcome = prepared_item.filter_outcome
+        canonical_assessment = prepared_item.canonical_assessment
+        canonical_assessment_markdown = (
+            prepared_item.canonical_assessment_markdown
         )
         identity = _compact_identity(item.candidate, key)
         filter_outcomes.append(
@@ -130,14 +153,34 @@ def _deliver_reviewed_jobs_locked(
             }
         )
         hard_rejected = filter_outcome.result == "confirmed_mismatch"
-        if not hard_rejected and item.assessment is None:
-            raise ValueError("semantic assessment is required after hard filters pass")
+        current_indexes = rebuild_indexes(workspace)
+        matched, ambiguous = resolve_duplicate_job_ids(
+            current_indexes, item.candidate
+        )
         if hard_rejected or (
             item.assessment is not None
             and item.assessment.disposition == "non_match"
         ):
             non_matches.append(key)
-            _revalidate_criteria_snapshot(workspace, criteria)
+            if matched and not ambiguous:
+                duplicates.append(key)
+                job_id = matched[0]
+                canonical_jobs[key] = job_id
+                _revalidate_approved_inputs(workspace, approved, criteria)
+                result = reverify_job(
+                    workspace,
+                    job_id,
+                    item.candidate,
+                    canonical_assessment,
+                    posting_markdown=item.posting_markdown,
+                    assessment_markdown=canonical_assessment_markdown,
+                    occurred_at=occurred_at,
+                )
+                if result.changed:
+                    meaningful_changes.append(job_id)
+            elif ambiguous:
+                duplicates.append(key)
+            _revalidate_approved_inputs(workspace, approved, criteria)
             rejection = _rejection_evidence(
                     item,
                     identity,
@@ -154,48 +197,47 @@ def _deliver_reviewed_jobs_locked(
             rejection["source_receipt_reference"] = rejection["evidence_receipt_reference"]
             rejections.append(rejection)
             continue
-        if key in identities:
+        if matched:
             duplicates.append(key)
-            matched = identities[key]
-            if isinstance(matched, list) and len(matched) == 1:
-                _revalidate_criteria_snapshot(workspace, criteria)
-                job_id = str(matched[0])
+            if not ambiguous:
+                _revalidate_approved_inputs(workspace, approved, criteria)
+                job_id = matched[0]
                 canonical_jobs[key] = job_id
                 result = reverify_job(
                     workspace,
                     job_id,
                     item.candidate,
-                    item.assessment,
+                    canonical_assessment,
                     posting_markdown=item.posting_markdown,
-                    assessment_markdown=item.assessment_markdown,
+                    assessment_markdown=canonical_assessment_markdown,
                     occurred_at=occurred_at,
                 )
                 if result.changed:
                     meaningful_changes.append(job_id)
             continue
         try:
-            _revalidate_criteria_snapshot(workspace, criteria)
+            _revalidate_approved_inputs(workspace, approved, criteria)
             record = create_job(
                 workspace,
                 item.candidate,
-                item.assessment,
+                canonical_assessment,
                 posting_markdown=item.posting_markdown,
-                assessment_markdown=item.assessment_markdown,
+                assessment_markdown=canonical_assessment_markdown,
                 occurred_at=occurred_at,
             )
         except DuplicateJobError as exc:
             duplicates.append(key)
             if len(exc.job_ids) == 1:
-                _revalidate_criteria_snapshot(workspace, criteria)
+                _revalidate_approved_inputs(workspace, approved, criteria)
                 job_id = exc.job_ids[0]
                 canonical_jobs[key] = job_id
                 result = reverify_job(
                     workspace,
                     job_id,
                     item.candidate,
-                    item.assessment,
+                    canonical_assessment,
                     posting_markdown=item.posting_markdown,
-                    assessment_markdown=item.assessment_markdown,
+                    assessment_markdown=canonical_assessment_markdown,
                     occurred_at=occurred_at,
                 )
                 if result.changed:
@@ -215,7 +257,7 @@ def _deliver_reviewed_jobs_locked(
         occurred_at,
         {"filter_outcomes": filter_outcomes, "rejections": rejections},
     )
-    _revalidate_criteria_snapshot(workspace, criteria)
+    _revalidate_approved_inputs(workspace, approved, criteria)
     atomic_write_json(
         evidence_path,
         {
@@ -237,6 +279,103 @@ def _deliver_reviewed_jobs_locked(
         meaningful_change_job_ids=tuple(dict.fromkeys(meaningful_changes)),
         run_evidence=evidence_path,
     )
+
+
+def _validate_review_batch(
+    reviewed: Sequence[ReviewedJob],
+    criteria: SearchCriteria | None,
+    approved: ApprovedAssessmentInputs,
+) -> tuple[_PreparedReview, ...]:
+    prepared: list[_PreparedReview] = []
+    codes: list[str] = []
+    for item in reviewed:
+        filter_outcome = (
+            evaluate_hard_filters(
+                item.candidate,
+                criteria,
+                evidence=item.criteria_evidence,
+            )
+            if criteria is not None
+            else HardFilterOutcome("pass", ())
+        )
+        if item.assessment is not None:
+            codes.extend(
+                error.code
+                for error in (
+                    *validate_assessment(
+                        item.candidate, approved.profile, item.assessment
+                    ),
+                    *validate_assessment_bindings(item.assessment, approved),
+                )
+            )
+        elif filter_outcome.result != "confirmed_mismatch":
+            codes.append("semantic_assessment_required")
+        if filter_outcome.result == "confirmed_mismatch":
+            canonical_assessment = _hard_filter_assessment(
+                filter_outcome, approved
+            )
+            canonical_assessment_markdown = _hard_filter_assessment_markdown(
+                canonical_assessment
+            )
+        else:
+            canonical_assessment = item.assessment
+            canonical_assessment_markdown = item.assessment_markdown
+        if canonical_assessment is None:
+            continue
+        prepared.append(
+            _PreparedReview(
+                item,
+                candidate_key(item.candidate),
+                filter_outcome,
+                canonical_assessment,
+                canonical_assessment_markdown,
+            )
+        )
+    if codes:
+        raise AssessmentBatchError(codes)
+    return tuple(prepared)
+
+
+def _hard_filter_assessment(
+    outcome: HardFilterOutcome,
+    approved: ApprovedAssessmentInputs,
+) -> JobAssessment:
+    reason_codes = tuple(dict.fromkeys(outcome.reason_codes))[:3]
+    return JobAssessment(
+        disposition="non_match",
+        role_to_profile_fit=(
+            "A confirmed user-owned hard exclusion applies to this role."
+        ),
+        strengths=(),
+        gaps=tuple(f"Hard exclusion: {code}." for code in reason_codes),
+        uncertainties=(),
+        reason_codes=reason_codes,
+        profile_hash=approved.profile_hash,
+        criteria_hash=approved.criteria_hash,
+    )
+
+
+def _hard_filter_assessment_markdown(assessment: JobAssessment) -> str:
+    reasons = "\n".join(f"- `{code}`" for code in assessment.reason_codes)
+    return (
+        "# Hard-filter reassessment\n\n"
+        f"{assessment.role_to_profile_fit}\n\n"
+        f"Reason codes:\n{reasons}\n"
+    )
+
+
+def _revalidate_approved_inputs(
+    workspace: WorkspacePaths,
+    expected: ApprovedAssessmentInputs,
+    criteria: SearchCriteria | None,
+) -> None:
+    try:
+        current = load_approved_assessment_inputs(workspace)
+        _revalidate_criteria_snapshot(workspace, criteria)
+    except AssessmentApprovalError as exc:
+        raise AssessmentBatchError((exc.code,)) from exc
+    if current != expected:
+        raise AssessmentBatchError(("approved_assessment_inputs_changed",))
 
 
 def _revalidate_criteria_snapshot(

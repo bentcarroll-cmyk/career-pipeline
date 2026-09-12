@@ -32,9 +32,17 @@ def main() -> int:
     parser.add_argument("--fetched-at", required=True)
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--employer")
+    parser.add_argument("--board")
     args = parser.parse_args()
     records = json.loads(args.input.read_text(encoding="utf-8"))
-    snapshot = SourceSnapshot(args.source, args.fetched_at, records)
+    snapshot = SourceSnapshot(
+        args.source,
+        args.fetched_at,
+        records,
+        employer=args.employer,
+        board=args.board,
+    )
     jobs = ADAPTERS[args.adapter](snapshot)
     atomic_write_json(args.output, {"jobs": [asdict(job) for job in jobs]})
     print(f"normalized {len(jobs)} job record(s)")

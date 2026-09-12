@@ -47,7 +47,7 @@
     "verified_at": {"type": "string", "minLength": 1},
     "verification_status": {"type": "string", "minLength": 1},
     "raw_field_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-    "disposition": {"enum": ["strong_match", "worth_considering"]},
+    "disposition": {"enum": ["strong_match", "worth_considering", "non_match"]},
     "status": {
       "enum": [
         "new",
@@ -65,6 +65,10 @@
     "strengths": {"type": "array"},
     "gaps": {"type": "array"},
     "uncertainties": {"type": "array"},
+    "assessment_profile_hash": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+    "assessment_criteria_hash": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+    "assessment_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "assessment_at": {"type": "string", "minLength": 1},
     "deadline": {"type": ["string", "null"]},
     "recommended_next_action": {"type": "string", "minLength": 1},
     "discovered_at": {"type": "string", "minLength": 1},

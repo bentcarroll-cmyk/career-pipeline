@@ -65,7 +65,12 @@ FIXTURES = (
 )
 
 
-def _assessment(disposition: str = "strong_match") -> JobAssessment:
+def _assessment(
+    disposition: str = "strong_match",
+    *,
+    profile_hash: str,
+    criteria_hash: str,
+) -> JobAssessment:
     strengths = (
         (EvidenceClaim("EV-SYN-001", "Led a fictional operating cadence."),)
         if disposition != "non_match"
@@ -77,13 +82,25 @@ def _assessment(disposition: str = "strong_match") -> JobAssessment:
         strengths=strengths,
         gaps=("A fictional domain gap needs confirmation.",),
         uncertainties=("Travel expectations are not stated.",),
+        profile_hash=profile_hash,
+        criteria_hash=criteria_hash,
     )
 
 
-def _reviewed(candidate, disposition: str = "strong_match") -> ReviewedJob:
+def _reviewed(
+    candidate,
+    disposition: str = "strong_match",
+    *,
+    profile_hash: str,
+    criteria_hash: str,
+) -> ReviewedJob:
     return ReviewedJob(
         candidate=candidate,
-        assessment=_assessment(disposition),
+        assessment=_assessment(
+            disposition,
+            profile_hash=profile_hash,
+            criteria_hash=criteria_hash,
+        ),
         posting_markdown="# Synthetic posting\n\nNo real opportunity data.\n",
         assessment_markdown="# Synthetic assessment\n\nNo real person data.\n",
     )
@@ -145,7 +162,10 @@ class PrivateBetaTests(unittest.TestCase):
             workspace = create_workspace(Path(raw) / "Synthetic-Career")
             profile = workspace.profile / "Career_Profile.md"
             criteria = workspace.profile / "Search_Criteria.md"
-            profile.write_text("Synthetic approved profile\n", encoding="utf-8")
+            profile.write_text(
+                "Synthetic approved profile\n\nEV-SYN-001: Fictional evidence.\n",
+                encoding="utf-8",
+            )
             criteria.write_text("Synthetic approved criteria\n", encoding="utf-8")
             (workspace.profile / "Writing_Preferences.md").write_text(
                 "Synthetic writing preferences\n",
@@ -283,10 +303,10 @@ class PrivateBetaTests(unittest.TestCase):
                 workspace,
                 DiscoveryState(),
                 (
-                    _reviewed(greenhouse),
-                    _reviewed(duplicate),
-                    _reviewed(generic, "worth_considering"),
-                    _reviewed(non_match, "non_match"),
+                    _reviewed(greenhouse, profile_hash=onboarding.profile_hash, criteria_hash=onboarding.criteria_hash),
+                    _reviewed(duplicate, profile_hash=onboarding.profile_hash, criteria_hash=onboarding.criteria_hash),
+                    _reviewed(generic, "worth_considering", profile_hash=onboarding.profile_hash, criteria_hash=onboarding.criteria_hash),
+                    _reviewed(non_match, "non_match", profile_hash=onboarding.profile_hash, criteria_hash=onboarding.criteria_hash),
                 ),
                 occurred_at="2026-09-11T12:05:00Z",
             )

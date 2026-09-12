@@ -6,7 +6,7 @@ import hashlib
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from .sources.base import CandidateJob
 
@@ -54,6 +54,75 @@ def candidate_key(job: CandidateJob) -> str:
 
 
 @dataclass(frozen=True)
+class OpportunityIdentity:
+    requisition: str | None
+    fallback: str
+
+
+@dataclass(frozen=True)
+class IdentityResolution:
+    matched_ids: tuple[str, ...] = ()
+    ambiguous_ids: tuple[str, ...] = ()
+
+    @property
+    def ambiguous(self) -> bool:
+        return bool(self.ambiguous_ids)
+
+
+def identity_from_fields(
+    employer: str,
+    requisition_id: str | None,
+    title: str,
+    location: str | None,
+    team: str | None,
+) -> OpportunityIdentity:
+    return OpportunityIdentity(
+        requisition_identity(employer, requisition_id),
+        fallback_identity(employer, title, location, team),
+    )
+
+
+def candidate_identity(job: CandidateJob) -> OpportunityIdentity:
+    return identity_from_fields(
+        job.employer, job.requisition_id, job.title, job.location, job.team
+    )
+
+
+def resolve_identity(
+    wanted: OpportunityIdentity,
+    existing: Mapping[str, OpportunityIdentity],
+) -> IdentityResolution:
+    if wanted.requisition is not None:
+        exact = tuple(
+            job_id
+            for job_id, identity in existing.items()
+            if identity.requisition == wanted.requisition
+        )
+        if exact:
+            return (
+                IdentityResolution(matched_ids=exact)
+                if len(exact) == 1
+                else IdentityResolution(ambiguous_ids=exact)
+            )
+        fallback = tuple(
+            job_id
+            for job_id, identity in existing.items()
+            if identity.requisition is None and identity.fallback == wanted.fallback
+        )
+    else:
+        fallback = tuple(
+            job_id
+            for job_id, identity in existing.items()
+            if identity.fallback == wanted.fallback
+        )
+    if len(fallback) == 1:
+        return IdentityResolution(matched_ids=fallback)
+    if fallback:
+        return IdentityResolution(ambiguous_ids=fallback)
+    return IdentityResolution()
+
+
+@dataclass(frozen=True)
 class DiscoveryPartition:
     novel: tuple[CandidateJob, ...]
     duplicates: tuple[CandidateJob, ...]
@@ -63,14 +132,17 @@ def partition_candidates(
     candidates: Iterable[CandidateJob],
     existing: Iterable[CandidateJob],
 ) -> DiscoveryPartition:
-    seen = {candidate_key(job) for job in existing}
+    seen = {
+        f"existing-{index}": candidate_identity(job)
+        for index, job in enumerate(existing)
+    }
     novel: list[CandidateJob] = []
     duplicates: list[CandidateJob] = []
     for job in candidates:
-        key = candidate_key(job)
-        if key in seen:
+        resolution = resolve_identity(candidate_identity(job), seen)
+        if resolution.matched_ids or resolution.ambiguous:
             duplicates.append(job)
             continue
-        seen.add(key)
+        seen[f"candidate-{len(seen)}"] = candidate_identity(job)
         novel.append(job)
     return DiscoveryPartition(tuple(novel), tuple(duplicates))

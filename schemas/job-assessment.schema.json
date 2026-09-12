@@ -29,7 +29,9 @@
       "maxItems": 3,
       "uniqueItems": true,
       "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$"}
-    }
+    },
+    "profile_hash": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+    "criteria_hash": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"}
   },
   "additionalProperties": false
 }
