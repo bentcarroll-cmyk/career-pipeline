@@ -1,18 +1,18 @@
 name: Report a problem
-description: Describe something that did not work during the private beta.
+description: Describe something that did not work during the public beta.
 title: "[Problem] "
 body:
   - type: markdown
     attributes:
       value: |
-        Everyone with repository access can read this issue. Please use a short
+        This issue is public and anyone can read it. Please use a short
         description or synthetic example, without résumés, personal career files,
         account details, or application documents.
   - type: input
     id: version
     attributes:
       label: Plugin version
-      placeholder: 0.1.1
+      placeholder: 0.1.3
     validations:
       required: true
   - type: input

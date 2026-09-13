@@ -1,5 +1,7 @@
 # Career Pipeline Private Beta Implementation Plan
 
+> Historical development record: findings, checklists, access settings, and counts describe the stage reviewed here. Consult the [current design notes](../../design.md) and current tests for the present scope and validation limits.
+
 > **For Codex:** Use `superpowers:executing-plans` to implement this plan task by task. Use `superpowers:test-driven-development` for every behavior change and `superpowers:verification-before-completion` before claiming a milestone or release is complete.
 
 **Goal:** Refactor and complete the Career Pipeline Codex Desktop plugin so each user's local folder workspace is the sole system of record, every connector is optional, application packets are created immediately on explicit request, and the private-beta package contains only reusable code, instructions, and synthetic fixtures.

@@ -1,10 +1,11 @@
-# Maintaining private-beta releases
+# Maintaining beta releases
 
-The repository is `bentcarroll-cmyk/career-pipeline`. Keep its visibility private.
+The public repository is `bentcarroll-cmyk/career-pipeline`.
+All pushed source, history, releases, and issue content are publicly readable.
 Publish releases from `main` with an immutable version tag, and mark beta releases
 as prereleases. The manifest, `pyproject.toml`, and `src/career_pipeline/__init__.py`
 must carry the same version.
-Release v0.1.1 is the first GitHub distribution of the local beta.
+Release v0.1.1 was the first private GitHub distribution. Release v0.1.3 introduces the public beta. Preserve the legacy marketplace identifier so existing installations can upgrade.
 
 ## Validate the candidate
 
@@ -41,14 +42,14 @@ friend's graphical installation. Keep those limits in release notes.
 
 Review the intended commit and the archived member list. The archive includes
 runtime files, beginner guides, and license terms. It excludes the Git history,
-tests, generated workspaces, and application documents. Before the first push,
+tests, generated workspaces, and application documents. Before publishing,
 also inspect the tracked source and history for private material. A scanner is a
 check for known patterns, not proof that every sensitive fact has been detected.
 
 ## Publish and read back
 
 1. Update all three version fields, the changelog, and release-specific guide links.
-2. Review and commit the candidate. Push it to the private repository's `main`.
+2. Review and commit the candidate. Push it to the public repository's `main`.
 3. Create a matching version tag at that exact commit and push the tag.
 4. Create a GitHub prerelease from that tag with the ZIP and SHA-256 file.
    Include what's changed, requirements, setup links, and validation limits.
@@ -59,18 +60,23 @@ check for known patterns, not proof that every sensitive fact has been detected.
    marketplace and package, and rerun the extracted synthetic package journey.
 
 Use the [releases page](https://github.com/bentcarroll-cmyk/career-pipeline/releases)
-in evergreen invitations because GitHub's "latest release" shortcut may skip
+in evergreen sharing links because GitHub's "latest release" shortcut may skip
 prereleases. Keep each published release's files immutable; corrections get a
 new version.
 
 ## Access and feedback
 
-Invite only usernames explicitly supplied by the owner. Repository invitations
-grant repository access; they do not share a person's local career workspace.
-Confirm the effective collaborator permissions before inviting testers. Personal
-GitHub repositories may give collaborators write access; do not promise read-only
-roles without verifying that the repository's account type supports them.
+Readers and evaluators do not need collaborator invitations. Adding a collaborator
+is a separate decision that may grant write access; it is unnecessary for viewing,
+downloading, or trying the public release.
 
-Use the private issue forms and [beta testing guide](beta-testing.md) for feedback.
-Ask the first friend to complete the observed setup before expanding the group.
-Keep proposed check-ins and invitation drafts distinct from messages actually sent.
+Use the public issue forms and [beta testing guide](beta-testing.md) for feedback.
+Never request personal workspaces, résumés, credentials, or application documents
+in public issues. Feedback is manual and voluntary. Keep proposed sharing messages
+distinct from messages actually sent.
+
+The source license allows personal use and evaluation while restricting
+redistribution and commercial use. Do not describe this release as open source.
+Earlier releases retain their original bundled terms and documentation; direct
+new evaluators to the current release. Historical plans and reviews describe the
+state at their recorded dates, not a current list of unresolved defects.

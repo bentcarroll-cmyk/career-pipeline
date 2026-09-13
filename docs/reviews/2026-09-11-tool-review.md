@@ -1,5 +1,7 @@
 # Career Pipeline review
 
+> Historical development record: findings, checklists, access settings, and counts describe the stage reviewed here. Consult the [current design notes](../design.md) and current tests for the present scope and validation limits.
+
 Reviewed September 11, 2026, against commit `836ce7b`. This review makes no implementation changes.
 
 The local workspace, stable job IDs, regenerable indexes, versioned packets, and optional exports form a useful foundation. The next development pass should focus on data preservation, enforcing evidence checks, and making interrupted work recover consistently before adding connectors or features.

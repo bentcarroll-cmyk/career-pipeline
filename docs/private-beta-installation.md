@@ -1,10 +1,12 @@
-# Install the private beta
+# Install Career Pipeline
 
-This guide is for invited testers using Codex Desktop on macOS. The recommended path is a release ZIP and guided setup in Codex. It does not require Git command-line authentication or a `pip` installation.
+This guide is for people evaluating the public beta using Codex Desktop on macOS. The recommended path is a release ZIP and guided setup in Codex. It does not require Git command-line authentication or a `pip` installation.
+
+The filenames and marketplace identifier retain `private-beta` for compatibility with existing installations. They do not indicate that repository access is restricted. This project is for personal use and evaluation under its [license](../LICENSE).
 
 ## Before you begin
 
-- Accept your invitation to [the private repository](https://github.com/bentcarroll-cmyk/career-pipeline) and sign in to GitHub. A missing page or download may mean you are signed in to the wrong account or have not accepted the invitation.
+- Download from [the public repository](https://github.com/bentcarroll-cmyk/career-pipeline). No repository invitation or GitHub sign-in is needed to view it or download the release assets.
 - Have Codex Desktop installed and signed in on **macOS**, with plugin support available. Local package checks have been validated on macOS; installation on a new tester's Mac remains part of beta testing. **Native Windows is unsupported** by the current workspace locking, and **Linux has not been validated**.
 - The local helpers require **Python 3.11 or newer**. Your computer's `python3` may be older; Codex can check for a suitable runtime it provides. No extra Python packages are needed for the core helpers.
 - Job discovery needs an available web capability. Final application packets also need Codex document and PDF capabilities. Connectors such as Linear, Gmail, and Google Drive are optional.
@@ -13,12 +15,12 @@ The guided path has package checks and a synthetic local workflow test. A comple
 
 ## Recommended: download a release and ask Codex to install it
 
-1. Open [Releases](https://github.com/bentcarroll-cmyk/career-pipeline/releases). Download both `career-pipeline-plugin.zip` and `career-pipeline-plugin.zip.sha256` from the newest release's **Assets**. Use those files, rather than GitHub's automatic “Source code” downloads. The initial friend-testing release is [v0.1.1](https://github.com/bentcarroll-cmyk/career-pipeline/releases/tag/v0.1.1).
+1. Open [Releases](https://github.com/bentcarroll-cmyk/career-pipeline/releases). Download both `career-pipeline-plugin.zip` and `career-pipeline-plugin.zip.sha256` from the newest release's **Assets**. Use those files, rather than GitHub's automatic “Source code” downloads. The public beta release is [v0.1.3](https://github.com/bentcarroll-cmyk/career-pipeline/releases/tag/v0.1.3).
 2. Keep the ZIP and checksum together, and extract the ZIP into a new folder. Choose a stable location you will keep, such as a `Career Pipeline Plugin` folder inside Documents. The plugin root is the folder containing `README.md`, `scripts/`, and `skills/`.
 3. In Codex, open a task with access to that extracted folder. Paste the prompt below, replacing the two bracketed paths with your actual folders. Codex may ask for access needed to read the download or install the plugin.
 
 ```text
-Install this Career Pipeline private beta for me.
+Install this Career Pipeline public beta for me.
 
 Extracted plugin folder: [full path to the extracted plugin folder]
 Download folder containing the ZIP and its .sha256 file: [full path to the download folder]
@@ -76,14 +78,14 @@ codex plugin add career-pipeline@career-pipeline-private-beta
 
 If the marketplace already exists, follow the [upgrade guide](private-beta-upgrades.md). Keep the extracted folder available, then start a new Codex task with **“Set up my job search.”**
 
-## Alternative: install from the private GitHub repository
+## Alternative: install from the public GitHub repository
 
-This route needs authenticated Git access to the private repository, in addition to your GitHub invitation. Signing in through a browser alone does not necessarily provide Git credentials. If Git authentication is unfamiliar or fails, use the release ZIP route above.
+This route reads the public repository and does not require a repository invitation or Git credentials. Codex itself must still be installed and signed in. If the GitHub route is unavailable in your Codex version, use the release ZIP route above.
 
-For the initial friend-testing release:
+For the public beta release:
 
 ```bash
-codex plugin marketplace add bentcarroll-cmyk/career-pipeline --ref v0.1.1
+codex plugin marketplace add bentcarroll-cmyk/career-pipeline --ref v0.1.3
 codex plugin add career-pipeline@career-pipeline-private-beta
 ```
 

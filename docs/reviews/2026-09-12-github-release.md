@@ -1,5 +1,7 @@
 # Private GitHub release verification
 
+> Historical development record: findings, checklists, access settings, and counts describe the stage reviewed here. Consult the [current design notes](../design.md) and current tests for the present scope and validation limits.
+
 Verified on 2026-09-12 after publication.
 
 - Repository: https://github.com/bentcarroll-cmyk/career-pipeline

@@ -1,13 +1,13 @@
-# Trying Career Pipeline with friends
+# Trying Career Pipeline
 
-Start with three to five invited testers. A useful first session ends with an
+Start with a guided evaluation session. A useful first session ends with an
 approved profile and search criteria, a small set of reviewed roles, and one
 requested application packet when a suitable role is available.
 
 ## Your first session
 
-1. Follow the [installation guide](private-beta-installation.md). Allow about
-   15 minutes for guided installation; onboarding and research may take longer.
+1. Follow the [installation guide](private-beta-installation.md). Record how
+   long setup takes and where assistance is needed; timing is not yet measured.
 2. Start a new Codex task and say: **Set up my job search.** Bring a current
    résumé and preferences for role, compensation, location, and travel.
 3. Choose a career workspace separate from the plugin installation. Review the
@@ -22,10 +22,10 @@ requested application packet when a suitable role is available.
 
 Use the [beta feedback form](https://github.com/bentcarroll-cmyk/career-pipeline/issues/new?template=beta_feedback.yml)
 or [report a problem](https://github.com/bentcarroll-cmyk/career-pipeline/issues/new?template=bug_report.yml).
-Issues in this private repository are visible to everyone with repository access.
+Issues in this public repository are visible to anyone, including search engines.
 Share a short description or a synthetic example. Leave out résumés, personal
 profile files, account details, and application documents. You can also give Ben
-feedback directly through the channel where you received your invitation.
+feedback directly through the channel where you discussed the project.
 
 The three most useful signals are:
 
@@ -36,24 +36,19 @@ The three most useful signals are:
 Include the plugin version and your operating system when describing a problem.
 Feedback is voluntary; the plugin does not send telemetry to its author.
 
-## Invitation draft for the maintainer
+## Optional sharing draft
 
-Send this after the friend has been granted access to the repository:
+This is a draft for manual sharing, not a message the plugin sends:
 
-> I built Career Pipeline, a Codex plugin that helps organize a job search,
-> find relevant roles, and prepare tailored application materials. I'm inviting
-> a few friends to try the private beta. You'll use your own career folder and
-> choose which, if any, account connections to enable.
+> I built Career Pipeline with Codex to explore a more structured, reviewable
+> job-search workflow. The public repository includes a design notes, a synthetic
+> walkthrough, and a macOS beta you can try for personal evaluation.
 >
 > Start here: https://github.com/bentcarroll-cmyk/career-pipeline
 >
-> Sign into the GitHub account I invited and accept the repository invitation.
-> The README links to the download and setup guide. After installation, start
-> a new Codex task and say "Set up my job search."
->
-> I'm happy to walk through the first setup. I'd love to know where it was
-> confusing, whether the roles were useful, and what you corrected in the
-> application materials. Please keep the plugin within the invited beta group.
+> No GitHub invitation is needed. The README links to the design notes, download,
+> and setup guide. I'd value feedback on the workflow and design choices, or
+> where setup was confusing. Please keep personal career files out of public issues.
 
 ## First-friend observation
 

@@ -1,8 +1,8 @@
-# Update the private beta
+# Update Career Pipeline
 
 Keep your **plugin installation** and **private job-search workspace** separate. Updating the plugin replaces reusable instructions and helpers. Your résumé, profile, saved jobs, history, and application versions belong in the workspace you chose during onboarding.
 
-The plugin version and workspace schema version are different. Release **v0.1.1** uses workspace **schema 2**, as v0.1.0 did. A workspace already on schema 2 does not need a schema migration just to install v0.1.1.
+The plugin version and workspace schema version are different. Release **v0.1.3** uses workspace **schema 2**, as v0.1.0 and v0.1.1 did. A workspace already on schema 2 does not need a schema migration just to install v0.1.3. The marketplace identifier remains unchanged for compatibility.
 
 ## Before updating
 
@@ -55,14 +55,14 @@ codex plugin marketplace add "/full/path/to/New Career Pipeline Plugin"
 codex plugin add career-pipeline@career-pipeline-private-beta
 ```
 
-For a GitHub installation, use the desired release tag instead of a local path. These commands install v0.1.1; substitute the exact published tag for a later release:
+For a GitHub installation, use the desired release tag instead of a local path. These commands install v0.1.3; substitute the exact published tag for a later release:
 
 ```bash
-codex plugin marketplace add bentcarroll-cmyk/career-pipeline --ref v0.1.1
+codex plugin marketplace add bentcarroll-cmyk/career-pipeline --ref v0.1.3
 codex plugin add career-pipeline@career-pipeline-private-beta
 ```
 
-Choose one route. Local and GitHub installs share the name `career-pipeline-private-beta`. Adding a second source with that name can collide with the existing registration. Removing and re-adding the registration also lets you change a GitHub source's pinned release tag. GitHub installs continue to require authenticated Git access to this private repository.
+Choose one route. Local and GitHub installs share the name `career-pipeline-private-beta`. Adding a second source with that name can collide with the existing registration. Removing and re-adding the registration also lets you change a GitHub source's pinned release tag. The repository is now public, so reading it no longer requires a repository invitation or Git credentials.
 
 These commands manage the plugin and marketplace, not the separately chosen workspace. Do not delete or replace the workspace while changing installation sources. If reinstallation fails, keep the workspace intact and use the [feedback guide](beta-testing.md) to report the failure.
 

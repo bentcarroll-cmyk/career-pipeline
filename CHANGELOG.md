@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.3 — 2026-09-12 (public beta)
+
+- Added workflow design documentation and a reproducible synthetic walkthrough.
+- Updated installation, feedback, and release guidance for public repository access.
+- Opened personal evaluation permissions while retaining redistribution and commercial-use restrictions.
+- Preserved the existing marketplace identifier and workspace schema for beta upgrades.
+- Kept runtime behavior unchanged; documented the distinction between automated verification and unmeasured user outcomes.
+
 ## 0.1.1 — 2026-09-12 (private beta)
 
 - Prepared the first private GitHub distribution with versioned release assets.

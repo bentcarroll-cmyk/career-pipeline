@@ -5,13 +5,13 @@ body:
   - type: markdown
     attributes:
       value: |
-        Feedback is voluntary and visible to everyone with repository access.
+        Feedback is voluntary and public; anyone can read it.
         Describe the experience without uploading personal career materials.
   - type: input
     id: version
     attributes:
       label: Plugin version and operating system
-      placeholder: 0.1.1, macOS
+      placeholder: 0.1.3, macOS
     validations:
       required: true
   - type: dropdown
