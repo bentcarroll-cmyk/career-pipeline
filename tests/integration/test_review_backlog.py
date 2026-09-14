@@ -20,6 +20,7 @@ from career_pipeline.packets import (
     save_manifest,
     start_packet,
 )
+from career_pipeline.schema import validate_document
 from career_pipeline.timestamps import parse_instant
 from career_pipeline.workspace import create_workspace
 from tests.unit.test_job_store import synthetic_assessment, synthetic_candidate
@@ -112,6 +113,85 @@ class ReviewBacklogTests(unittest.TestCase):
                 view["actions"][4]["ranking_factors"]["deadline_priority"],
             )
             self.assertEqual(view, build_actionable_backlog(workspace, as_of="2026-09-11T16:00:00Z"))
+
+    def test_reassessed_non_match_keeps_its_applied_followup_and_lifecycle_rank(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            self._create_ranked_jobs(workspace)
+            applied_jobs = []
+            for number, disposition in (
+                (7, "strong_match"),
+                (8, "strong_match"),
+                (9, "worth_considering"),
+            ):
+                candidate = replace(
+                    synthetic_candidate(),
+                    source_record_id=f"backlog-{number}",
+                    requisition_id=f"SYN-BACKLOG-{number}",
+                    title=f"Synthetic Role {number}",
+                    deadline=None,
+                )
+                assessment = replace(
+                    synthetic_assessment(),
+                    disposition=disposition,
+                    gaps=(),
+                    uncertainties=(),
+                )
+                job_id = create_job(
+                    workspace,
+                    candidate,
+                    assessment,
+                    posting_markdown="# Synthetic posting\n",
+                    assessment_markdown="# Synthetic assessment\n",
+                    occurred_at="2026-09-11T17:00:00Z",
+                )["job_id"]
+                update_job_status(
+                    workspace, job_id, "applied", occurred_at="2026-09-11T18:00:00Z"
+                )
+                applied_jobs.append((job_id, candidate, assessment))
+            job_id, candidate, assessment = applied_jobs[0]
+            reverify_job(
+                workspace,
+                job_id,
+                replace(candidate, verified_at="2026-09-11T19:00:00Z"),
+                replace(
+                    assessment,
+                    disposition="non_match",
+                    gaps=("Required hub residence conflicts with candidate location.",),
+                ),
+                posting_markdown="# Updated synthetic posting\n",
+                assessment_markdown="# Updated location assessment\n",
+                occurred_at="2026-09-11T19:00:00Z",
+            )
+
+            view = build_actionable_backlog(workspace, as_of="2026-09-11T20:00:00Z")
+
+            self.assertEqual(
+                [item["job_id"] for item in view["actions"]],
+                [
+                    "JOB-000001",
+                    "JOB-000008",
+                    "JOB-000009",
+                    "JOB-000007",
+                    "JOB-000002",
+                    "JOB-000003",
+                    "JOB-000004",
+                    "JOB-000006",
+                ],
+            )
+            reassessed = view["actions"][3]
+            self.assertEqual(reassessed["status"], "applied")
+            self.assertEqual(reassessed["disposition"], "non_match")
+            self.assertEqual(
+                reassessed["major_gap"],
+                "Required hub residence conflicts with candidate location.",
+            )
+            self.assertIn("Monitor the application", reassessed["recommended_next_action"])
+            self.assertEqual(validate_document("actionable-backlog", view), [])
+            self.assertEqual(
+                json.loads((workspace.indexes / "actionable-backlog.json").read_text()),
+                view,
+            )
 
     def test_incomplete_packet_is_separate_from_advanced_lifecycle_status(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

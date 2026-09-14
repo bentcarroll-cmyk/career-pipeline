@@ -30,6 +30,7 @@ Create or resume a private local-first Career Pipeline workspace through convers
 ### Workspace
 
 Run the workspace initializer and validator after approval. Reject a root inside the installed plugin or source repository. Create `Profile/`, `Sources/`, `Jobs/`, `Applications/`, `Indexes/`, `Runs/`, and `State/`. Store generated paths in `State/config.json`; reusable instructions read configuration rather than embedding an absolute path.
+Enable `require_review_queue: true` in the configuration so discovery persists and resumes every returned listing before claiming completion.
 
 ### Connectors
 

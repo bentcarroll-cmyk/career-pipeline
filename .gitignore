@@ -37,6 +37,7 @@ Career-Workspace/
 *.pdf
 
 # Local editor and OS artifacts
+.playwright-mcp/
 .DS_Store
 .idea/
 .vscode/

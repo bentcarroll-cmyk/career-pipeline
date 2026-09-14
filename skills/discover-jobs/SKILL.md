@@ -19,6 +19,7 @@ If a precondition fails, do not advance source state or allocate a job ID.
 ## Workflow
 
 1. Read [source routing](references/source-routing.md). Search only enabled sources with currently observed required actions.
+   First follow [complete intake and resumable review](references/review-queue.md): enable the queue, resume pending work before new queries, and persist every returned listing before selecting positives. Every unique listing needs an individual outcome; genuine blockers need observed attempts and a retry. Check canonical and configured legacy/email history before final delivery.
 2. Save a content-addressed minimal source receipt and normalize criterion evidence into typed, source-bound values. Numeric values require explicit bounds and comparable units; conflicting, malformed, unverified, or ambiguous values remain unknown.
 3. Verify the original posting and actual application destination where possible. Preserve uncertainty.
 4. Read [evaluation and canonical delivery](references/evaluation-and-delivery.md). Apply user-confirmed deterministic hard filters before semantic assessment. Evaluate responsibilities before title and validate positive fit claims against approved profile evidence IDs.
@@ -27,5 +28,6 @@ If a precondition fails, do not advance source state or allocate a job ID.
 7. For each novel Strong Match or Worth Considering role, acquire the workspace lock, repeat the duplicate check, allocate the next local ID, and create the complete `Jobs/JOB-000123/` folder.
 8. Read `job.json` and required evidence files back before success. Regenerate `Indexes/backlog.json` and `Indexes/deduplication.json` from canonical folders.
 9. Advance only successful source checkpoints and save the stable batch of new local IDs.
+   Use the queue's counts to distinguish reviewed, blocked, and untouched work. Never label a source or run complete while queue work remains unresolved. Persist and report every qualifying role with explicit uncertainties.
 
 Report new matches, meaningful changes, or newly actionable failures. Stay quiet when nothing materially changed, including a failure already reported unchanged. Connector export is outside this workflow and requires a separate explicit request.

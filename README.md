@@ -6,9 +6,9 @@ Career Pipeline is a Codex Desktop plugin that helps people define their search,
 
 Created by **Ben Carroll**, with AI-assisted implementation and review through Codex. The beta has automated coverage; hiring outcomes, time savings, and independent user adoption have not been measured.
 
-**v0.1.3 · macOS beta**
+**v0.1.4 · macOS beta**
 
-[Read the design notes](https://github.com/bentcarroll-cmyk/career-pipeline/blob/main/docs/design.md) · [Try the synthetic walkthrough](https://github.com/bentcarroll-cmyk/career-pipeline/blob/main/docs/demo.md) · [Download the release](https://github.com/bentcarroll-cmyk/career-pipeline/releases/tag/v0.1.3)
+[Read the design notes](https://github.com/bentcarroll-cmyk/career-pipeline/blob/main/docs/design.md) · [Try the synthetic walkthrough](https://github.com/bentcarroll-cmyk/career-pipeline/blob/main/docs/demo.md) · [Download the release](https://github.com/bentcarroll-cmyk/career-pipeline/releases/tag/v0.1.4)
 
 ## The problem
 
@@ -54,7 +54,7 @@ The [design notes](https://github.com/bentcarroll-cmyk/career-pipeline/blob/main
 
 Start with the [synthetic walkthrough](https://github.com/bentcarroll-cmyk/career-pipeline/blob/main/docs/demo.md). It exercises local behavior without a personal résumé, connected accounts, live research, or employer outreach.
 
-To try the plugin, download `career-pipeline-plugin.zip` and its `.sha256` file from [v0.1.3](https://github.com/bentcarroll-cmyk/career-pipeline/releases/tag/v0.1.3), then follow the [guided installation](docs/private-beta-installation.md). Repository invitations are no longer required. After installation, start a new Codex task and say **“Set up my job search.”**
+To try the plugin, download `career-pipeline-plugin.zip` and its `.sha256` file from [v0.1.4](https://github.com/bentcarroll-cmyk/career-pipeline/releases/tag/v0.1.4), then follow the [guided installation](docs/private-beta-installation.md). Repository invitations are no longer required. After installation, start a new Codex task and say **“Set up my job search.”**
 
 The beta targets **Codex Desktop on macOS** and **Python 3.11+**. Native Windows is unsupported by the current workspace locking; Linux is unvalidated. The core helpers require no additional Python packages. Live discovery needs a web capability, and real application packets need document and PDF capabilities. A complete installation and real workflow on another person's Mac still need observation.
 

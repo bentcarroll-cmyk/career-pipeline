@@ -35,7 +35,7 @@ from .job_store import (
     DuplicateJobError,
     create_job,
     reverify_job,
-    workspace_lock,
+    workspace_lock_if_needed as workspace_lock,
 )
 from .sources.base import CandidateJob
 
@@ -97,13 +97,23 @@ def deliver_reviewed_jobs(
     if not occurred_at:
         raise ValueError("occurred_at is required")
     with workspace_lock(workspace):
-        return _deliver_reviewed_jobs_locked(
+        from .review_queue import enabled, validate_delivery, mark_delivered
+        queue_enabled = enabled(workspace)
+        if queue_enabled:
+            validate_delivery(workspace, {"reviewed": [asdict(item) for item in reviewed]}, now=occurred_at)
+        outcome = _deliver_reviewed_jobs_locked(
             workspace,
             state,
             reviewed,
             occurred_at=occurred_at,
             criteria=criteria,
         )
+        if queue_enabled:
+            for item in reviewed:
+                job_id = outcome.state.canonical_jobs.get(candidate_key(item.candidate))
+                if job_id is not None:
+                    mark_delivered(workspace, asdict(item.candidate), job_id)
+        return outcome
 
 
 def _deliver_reviewed_jobs_locked(

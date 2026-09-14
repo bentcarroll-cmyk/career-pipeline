@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.4 — 2026-09-14 (public beta)
+
+- Persist complete discovery intake and source descriptions in a durable review queue.
+- Resume unfinished reviews and due verification retries before expanding search.
+- Require individual outcomes and observed evidence for blockers; reject generic pending labels.
+- Prevent unreviewed delivery and false source checkpoint advancement under the workspace lock.
+- Reopen changed source content or approved inputs and retain review history without automatically suppressing title matches.
+- Keep submitted applications visible in the actionable backlog when a later assessment marks the role as a non-match; preserve follow-up actions and qualification gaps without a ranking error.
+
 ## 0.1.3 — 2026-09-12 (public beta)
 
 - Added workflow design documentation and a reproducible synthetic walkthrough.

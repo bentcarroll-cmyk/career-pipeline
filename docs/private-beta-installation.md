@@ -15,7 +15,7 @@ The guided path has package checks and a synthetic local workflow test. A comple
 
 ## Recommended: download a release and ask Codex to install it
 
-1. Open [Releases](https://github.com/bentcarroll-cmyk/career-pipeline/releases). Download both `career-pipeline-plugin.zip` and `career-pipeline-plugin.zip.sha256` from the newest release's **Assets**. Use those files, rather than GitHub's automatic “Source code” downloads. The public beta release is [v0.1.3](https://github.com/bentcarroll-cmyk/career-pipeline/releases/tag/v0.1.3).
+1. Open [Releases](https://github.com/bentcarroll-cmyk/career-pipeline/releases). Download both `career-pipeline-plugin.zip` and `career-pipeline-plugin.zip.sha256` from the newest release's **Assets**. Use those files, rather than GitHub's automatic “Source code” downloads. The public beta release is [v0.1.4](https://github.com/bentcarroll-cmyk/career-pipeline/releases/tag/v0.1.4).
 2. Keep the ZIP and checksum together, and extract the ZIP into a new folder. Choose a stable location you will keep, such as a `Career Pipeline Plugin` folder inside Documents. The plugin root is the folder containing `README.md`, `scripts/`, and `skills/`.
 3. In Codex, open a task with access to that extracted folder. Paste the prompt below, replacing the two bracketed paths with your actual folders. Codex may ask for access needed to read the download or install the plugin.
 
@@ -85,7 +85,7 @@ This route reads the public repository and does not require a repository invitat
 For the public beta release:
 
 ```bash
-codex plugin marketplace add bentcarroll-cmyk/career-pipeline --ref v0.1.3
+codex plugin marketplace add bentcarroll-cmyk/career-pipeline --ref v0.1.4
 codex plugin add career-pipeline@career-pipeline-private-beta
 ```
 

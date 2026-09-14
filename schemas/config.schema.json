@@ -35,6 +35,7 @@
     },
     "profile_approved": {"type": "boolean"},
     "criteria_approved": {"type": "boolean"},
+    "require_review_queue": {"type": "boolean"},
     "connectors": {"type": "object"},
     "enabled_sources": {
       "type": "array",

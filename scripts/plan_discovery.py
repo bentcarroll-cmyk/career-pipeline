@@ -22,6 +22,8 @@ from career_pipeline.discovery import AssessmentBatchError, ReviewedJob, deliver
 from career_pipeline.evaluation import EvidenceClaim, JobAssessment
 from career_pipeline.sources.base import CandidateJob
 from career_pipeline.workspace import create_workspace
+from career_pipeline.job_store import workspace_lock
+from career_pipeline.review_queue import enabled, validate_delivery, summary
 
 
 _PUBLIC_ATS_SOURCES = frozenset({"public_ats", "greenhouse", "lever", "ashby"})
@@ -82,6 +84,7 @@ def _source_results(path: Path) -> tuple[tuple[str, SourceResult], ...]:
                     completed_at=value["completed_at"],
                     seen_records=tuple(value.get("seen_records", ())),
                     cursor=value.get("cursor"),
+                    intake_ids=tuple(value.get("intake_ids", ())),
                 ),
             )
         )
@@ -130,33 +133,41 @@ def main() -> int:
             file=sys.stderr,
         )
         return 3
-    criteria_path = workspace.profile / "Search_Criteria.json"
-    criteria = (
-        load_search_criteria(
-            criteria_path,
-            readable_path=workspace.profile / "Search_Criteria.md",
+    payload = json.loads(args.reviewed.read_text(encoding="utf-8"))
+    with workspace_lock(workspace):
+        if enabled(workspace):
+            try:
+                validate_delivery(workspace, payload, now=args.occurred_at)
+            except ValueError as exc:
+                print(json.dumps({"error": str(exc)}), file=sys.stderr)
+                return 4
+        criteria_path = workspace.profile / "Search_Criteria.json"
+        criteria = (
+            load_search_criteria(
+                criteria_path,
+                readable_path=workspace.profile / "Search_Criteria.md",
+            )
+            if criteria_path.is_file()
+            else None
         )
-        if criteria_path.is_file()
-        else None
-    )
-    state_path = workspace.state / "discovery-state.json"
-    state = load_discovery_state(state_path) if state_path.exists() else DiscoveryState()
-    try:
-        outcome = deliver_reviewed_jobs(
+        state_path = workspace.state / "discovery-state.json"
+        state = load_discovery_state(state_path) if state_path.exists() else DiscoveryState()
+        try:
+            outcome = deliver_reviewed_jobs(
+                workspace,
+                state,
+                _reviewed(args.reviewed),
+                occurred_at=args.occurred_at,
+                criteria=criteria,
+            )
+        except AssessmentBatchError as exc:
+            print(json.dumps({"error": "assessment_batch_invalid", "codes": exc.codes}), file=sys.stderr)
+            return 2
+        state = merge_discovery_state(
             workspace,
-            state,
-            _reviewed(args.reviewed),
-            occurred_at=args.occurred_at,
-            criteria=criteria,
+            outcome.state,
+            _source_results(args.reviewed),
         )
-    except AssessmentBatchError as exc:
-        print(json.dumps({"error": "assessment_batch_invalid", "codes": exc.codes}), file=sys.stderr)
-        return 2
-    state = merge_discovery_state(
-        workspace,
-        outcome.state,
-        _source_results(args.reviewed),
-    )
     print(
         json.dumps(
             {
@@ -165,6 +176,7 @@ def main() -> int:
                 "non_match_keys": outcome.non_match_keys,
                 "meaningful_change_job_ids": outcome.meaningful_change_job_ids,
                 "stable_review_batch": state.stable_review_batch,
+                "review_queue": summary(workspace, now=args.occurred_at) if enabled(workspace) else None,
                 "run_evidence": outcome.run_evidence.relative_to(workspace.root).as_posix(),
             },
             sort_keys=True,

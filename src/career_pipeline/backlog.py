@@ -49,7 +49,7 @@ _LIFECYCLE_PRIORITY = {
     "needs_confirmation": 400,
     "new": 300,
 }
-_DISPOSITION_PRIORITY = {"strong_match": 2, "worth_considering": 1}
+_DISPOSITION_PRIORITY = {"strong_match": 2, "worth_considering": 1, "non_match": 0}
 
 
 def _canonical_records(

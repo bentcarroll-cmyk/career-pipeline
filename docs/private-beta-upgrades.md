@@ -2,7 +2,7 @@
 
 Keep your **plugin installation** and **private job-search workspace** separate. Updating the plugin replaces reusable instructions and helpers. Your résumé, profile, saved jobs, history, and application versions belong in the workspace you chose during onboarding.
 
-The plugin version and workspace schema version are different. Release **v0.1.3** uses workspace **schema 2**, as v0.1.0 and v0.1.1 did. A workspace already on schema 2 does not need a schema migration just to install v0.1.3. The marketplace identifier remains unchanged for compatibility.
+The plugin version and workspace schema version are different. Release **v0.1.4** uses workspace **schema 2**, as v0.1.0, v0.1.1, and v0.1.3 did. A workspace already on schema 2 does not need a schema migration just to install v0.1.4. The marketplace identifier remains unchanged for compatibility.
 
 ## Before updating
 
@@ -55,10 +55,10 @@ codex plugin marketplace add "/full/path/to/New Career Pipeline Plugin"
 codex plugin add career-pipeline@career-pipeline-private-beta
 ```
 
-For a GitHub installation, use the desired release tag instead of a local path. These commands install v0.1.3; substitute the exact published tag for a later release:
+For a GitHub installation, use the desired release tag instead of a local path. These commands install v0.1.4; substitute the exact published tag for a later release:
 
 ```bash
-codex plugin marketplace add bentcarroll-cmyk/career-pipeline --ref v0.1.3
+codex plugin marketplace add bentcarroll-cmyk/career-pipeline --ref v0.1.4
 codex plugin add career-pipeline@career-pipeline-private-beta
 ```
 
@@ -73,6 +73,8 @@ Start a **new Codex task** so it loads the updated skills. Say:
 > Resume my existing Career Pipeline workspace at [full workspace path]. Verify the installed version and workspace health, then show my saved jobs and application versions.
 
 Confirm that your profile, saved jobs, statuses, and application versions are present. Resume your previously approved schedules only after these checks pass. A healthy installation is not evidence that a scheduled run or connector has succeeded; check those separately when you use them.
+
+When resuming discovery with v0.1.4, have Codex enable `require_review_queue: true` in the existing workspace's `State/config.json` and follow the [review queue workflow](../skills/discover-jobs/references/review-queue.md). This retains returned listings and unfinished reviews between runs. Existing schedules should use the updated discovery instructions; installing the package alone does not rewrite saved automation prompts.
 
 ## Only when a workspace migration is needed
 

@@ -10,7 +10,7 @@ from typing import Mapping
 
 from .atomic import atomic_write_json, load_json
 from .contracts import WorkspacePaths
-from .job_store import workspace_lock
+from .job_store import workspace_lock_if_needed as workspace_lock
 from .timestamps import TimestampError, parse_instant
 
 
@@ -27,6 +27,7 @@ class SourceResult:
     completed_at: str
     seen_records: tuple[str, ...]
     cursor: str | None
+    intake_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -143,6 +144,13 @@ def merge_discovery_state(
     """Merge one completed run into the latest state without losing other runs."""
     state_path = workspace.state / "discovery-state.json"
     with workspace_lock(workspace):
+        from .review_queue import enabled, validate_delivery
+        if enabled(workspace):
+            validate_delivery(workspace, {"source_results": {
+                source: {"success": result.success, "completed_at": result.completed_at,
+                         "seen_records": result.seen_records, "intake_ids": result.intake_ids}
+                for source, result in source_results
+            }}, now=source_results[0][1].completed_at if source_results else "1970-01-01T00:00:00+00:00", require_delivered=True)
         latest = (
             load_discovery_state(state_path)
             if state_path.exists()
