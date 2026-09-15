@@ -68,6 +68,24 @@ These commands manage the plugin and marketplace, not the separately chosen work
 
 ## Resume and check your existing work
 
+### Recover legacy application layout evidence
+
+An existing packet whose original quality receipt predates `resume_layout` can retain its version and completed editorial review. Follow the [same-version recovery command](../skills/prepare-application/references/local-delivery-and-optional-export.md#recover-a-legacy-packet-on-the-same-version) to remeasure its unchanged PDFs and append a bound `layout_revalidated` audit, then resume the normal saved/delivery workflow. Recovery leaves earlier receipts and canonical status intact. Missing editorial approval, conflicting bindings, changed PDFs, and failed measurement still block completion; they require appropriate review or a new explicitly requested version.
+
+Older plugin versions cannot interpret the supplemental audit receipt. Preserve the pre-upgrade workspace backup before using recovery; reinstalling an old plugin alone is not a compatible downgrade of the updated packet history.
+
+### Location filtering and evidence recovery in v0.1.9
+
+The optional approved `discovery_location_scope` reduces detailed review without discarding board inventory. Existing criteria files remain compatible when the field is absent. Adding the policy requires explicit user approval of nonlocal-only search exclusions and updated readable/structured approval hashes. Older plugin versions do not understand this added field: preserve the pre-change criteria and queue backup; do not treat reinstalling an older plugin alone as a safe rollback.
+
+Inspect `plan-recovery` for legacy review rows containing multiple source posting IDs. Apply the exact hash-bound plan with `recover --input <plan.json>` before further review. Recovery preserves every observation and archives original decisions; separated postings require individual reassessment. Then inspect retrieval status and replay saved scopes with normalization repair pending. Conflicting newer descriptions need explicit reconciliation. Apply `prefilter --dry-run` before `prefilter` to existing work and report remaining review work rather than calling the whole search complete.
+
+### Retrieval-completeness changes in the next release
+
+The unreleased retrieval repair adds `State/discovery-retrieval.json` alongside the existing review queue. It does not reset saved jobs, application states, source checkpoints, or historic decisions. A legacy batch can still be fully reviewed, but its retrieval coverage is unknown until there is supported capture evidence. The queue's `review_complete` retains the batch-review meaning; `complete` requires both review and retrieval accounting.
+
+After installing a release containing this change, refresh saved discovery automation prompts from the new plugin instructions. Register the full known query plan before requests and follow the [retrieval workflow](../skills/discover-jobs/references/retrieval.md). Use complete-board collectors where supported; retain capped Indeed and unsupported-source responses as supplementary scopes. Previously omitted records are not retroactively recovered merely by installing the code. Recover them from original source responses with explicit provenance, or perform a newly authorized search; never label historic partial captures as exhaustive.
+
 Start a **new Codex task** so it loads the updated skills. Say:
 
 > Resume my existing Career Pipeline workspace at [full workspace path]. Verify the installed version and workspace health, then show my saved jobs and application versions.

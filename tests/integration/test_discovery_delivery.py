@@ -959,11 +959,12 @@ class DiscoveryDeliveryTests(unittest.TestCase):
             )
 
     def test_discovery_cli_persists_source_checkpoint_across_runs(self) -> None:
+        from tests.retrieval_fixtures import captured_reviewed_item
         with tempfile.TemporaryDirectory() as raw:
             workspace_root = Path(raw) / "Synthetic-Career"
-            create_workspace(workspace_root)
+            workspace = create_workspace(workspace_root)
             payload_path = Path(raw) / "synthetic-reviewed.json"
-            item = reviewed(800)
+            item, scope = captured_reviewed_item(workspace, reviewed(800), "2026-09-11T18:00:00Z")
             payload_path.write_text(
                 json.dumps(
                     {
@@ -981,6 +982,8 @@ class DiscoveryDeliveryTests(unittest.TestCase):
                                 "completed_at": "2026-09-11T18:05:00Z",
                                 "seen_records": ["synthetic-800"],
                                 "cursor": "synthetic-next",
+                                "coverage_scope_ids": [scope["scope_id"]],
+                                "intake_ids": scope["intake_ids"],
                             }
                         },
                     }

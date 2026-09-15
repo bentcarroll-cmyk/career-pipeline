@@ -11,6 +11,10 @@ The filenames and marketplace identifier retain `private-beta` for compatibility
 - The local helpers require **Python 3.11 or newer**. Your computer's `python3` may be older; Codex can check for a suitable runtime it provides. No extra Python packages are needed for the core helpers.
 - Job discovery needs an available web capability. Final application packets also need Codex document and PDF capabilities. Connectors such as Linear, Gmail, and Google Drive are optional.
 
+### Resume PDF verification (v0.1.7 and later)
+
+Final resume verification uses `pdfplumber`. Prefer the Python runtime returned by Codex's workspace dependency tool, which includes the PDF libraries. For a separate Python environment, install the optional group from the extracted plugin root with `python3 -m pip install '.[pdf]'`. Discovery and local storage still require no extra packages. A missing PDF dependency blocks packet completion with an actionable error; it must never be treated as a passed check. See the [packet quality gates](../skills/prepare-application/references/quality-gates.md).
+
 The guided path has package checks and a synthetic local workflow test. A complete installation and real job search on a new tester's computer remain part of beta testing.
 
 ## Recommended: download a release and ask Codex to install it

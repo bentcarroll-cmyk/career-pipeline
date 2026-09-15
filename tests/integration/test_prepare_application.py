@@ -15,7 +15,7 @@ from career_pipeline.packets import (
 )
 from career_pipeline.workspace import create_workspace
 from tests.unit.test_packets import seed_job, synthetic_packet_options
-from tests.pdf_helper import write_minimal_pdf
+from tests.pdf_helper import write_text_pdf
 from tests.unit.test_packets import advance_to_saved
 
 
@@ -119,9 +119,9 @@ class PrepareApplicationIntegrationTests(unittest.TestCase):
                 explicit_request=True,
             )
             resume = workspace.root / record.resume_pdf
-            write_minimal_pdf(resume, pages=2)
+            write_text_pdf(resume, pages=2)
             hashes = collect_local_artifacts(workspace, record).hashes
-            manifest = advance_to_saved(manifest, job_id, hashes)
+            manifest = advance_to_saved(workspace, manifest, job_id, hashes)
             complete_local_delivery(
                 workspace,
                 manifest,
@@ -149,7 +149,7 @@ class PrepareApplicationIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(unchanged.returncode, 0, unchanged.stdout)
 
-            write_minimal_pdf(resume, pages=1)
+            write_text_pdf(resume, pages=1)
             modified = subprocess.run(
                 [
                     sys.executable,

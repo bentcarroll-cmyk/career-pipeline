@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
@@ -17,8 +18,11 @@ from .job_store import (
     record_application_version,
     update_job_status,
     workspace_lock,
+    workspace_lock_if_needed,
 )
 from .quality import QualityReceipt, validate_quality_receipt
+from .resume_layout import LayoutMeasurementError, measure_resume_layout, validate_layout_receipt
+from .timestamps import TimestampError, parse_instant
 
 
 STAGES = (
@@ -81,11 +85,13 @@ class ArtifactVerification:
     valid: bool
     errors: tuple[str, ...]
     hashes: Mapping[str, str]
+    resume_layout: Mapping[str, object] | None = None
 
 
 _UNSAFE = re.compile(r"[^A-Za-z0-9_-]+")
 _UNDERSCORES = re.compile(r"_+")
 _SHA256 = re.compile(r"[a-f0-9]{64}")
+_LAYOUT_REVALIDATED = "layout_revalidated"
 _MANIFEST_KEYS = frozenset({"schema_version", "packets"})
 _MANIFEST_RECORD_REQUIRED_KEYS = frozenset(
     {
@@ -309,6 +315,8 @@ def _merge_manifests(
     for job_id in sorted(set(stored.packets) | set(incoming.packets)):
         by_version: dict[str, PacketRecord] = {}
         for record in (*stored.packets.get(job_id, ()), *incoming.packets.get(job_id, ())):
+            if _LAYOUT_REVALIDATED in record.receipts:
+                validate_packet_history(record)
             existing = by_version.get(record.version)
             if existing is None or existing == record:
                 by_version[record.version] = record
@@ -325,11 +333,22 @@ def _merge_manifests(
             if any(
                 dict(higher.receipts.get(stage, {})) != dict(receipt)
                 for stage, receipt in lower.receipts.items()
+                if stage != _LAYOUT_REVALIDATED
             ):
                 raise InvalidPacketTransition("packet receipt history conflicts")
-            if existing_index == record_index and existing != record:
+            if existing_index == record_index and (
+                {key: value for key, value in existing.receipts.items() if key != _LAYOUT_REVALIDATED}
+                != {key: value for key, value in record.receipts.items() if key != _LAYOUT_REVALIDATED}
+            ):
                 raise InvalidPacketTransition("packet stage state conflicts")
-            by_version[record.version] = higher
+            existing_audit = existing.receipts.get(_LAYOUT_REVALIDATED)
+            incoming_audit = record.receipts.get(_LAYOUT_REVALIDATED)
+            if existing_audit is not None and incoming_audit is not None and existing_audit != incoming_audit:
+                raise InvalidPacketTransition("packet layout revalidation receipt conflicts")
+            receipts = dict(higher.receipts)
+            if existing_audit is not None or incoming_audit is not None:
+                receipts[_LAYOUT_REVALIDATED] = existing_audit if existing_audit is not None else incoming_audit
+            by_version[record.version] = replace(higher, receipts=receipts)
         packets[job_id] = tuple(by_version[name] for name in sorted(by_version))
     return ApplicationManifest(schema_version=stored.schema_version, packets=packets)
 
@@ -359,7 +378,7 @@ def persist_manifest(
     manifest: ApplicationManifest,
 ) -> ApplicationManifest:
     manifest_path = workspace.state / "application-manifest.json"
-    with workspace_lock(workspace):
+    with workspace_lock_if_needed(workspace):
         stored = (
             load_manifest(manifest_path)
             if manifest_path.exists()
@@ -379,7 +398,7 @@ def _delivery_record(
     if requested is None:
         raise InvalidPacketTransition("packet job is not in the manifest")
     manifest_path = workspace.state / "application-manifest.json"
-    with workspace_lock(workspace):
+    with workspace_lock_if_needed(workspace):
         stored = (
             load_manifest(manifest_path)
             if manifest_path.exists()
@@ -549,6 +568,8 @@ def advance_packet(
     job_id: str,
     stage: str,
     receipt: Mapping[str, object],
+    *,
+    workspace: WorkspacePaths | None = None,
 ) -> ApplicationManifest:
     current = _latest(manifest, job_id)
     if current is None:
@@ -560,12 +581,17 @@ def advance_packet(
     if requested_index == current_index:
         if dict(current.receipts.get(stage, {})) != dict(receipt):
             raise InvalidPacketTransition("repeated stage has a conflicting receipt")
+        if stage in {"quality_checked", "ready"}:
+            _validate_stage_receipt(current, stage, receipt)
+            _require_measured_artifacts(workspace, current, stage, receipt)
         return manifest
     if requested_index != current_index + 1:
         raise InvalidPacketTransition("packet stages cannot be skipped or reversed")
     if not receipt:
         raise InvalidPacketTransition("each packet stage requires a receipt")
     _validate_stage_receipt(current, stage, receipt)
+    if stage in {"quality_checked", "ready"}:
+        _require_measured_artifacts(workspace, current, stage, receipt)
     receipts = dict(current.receipts)
     receipts[stage] = dict(receipt)
     updated_record = replace(current, stage=stage, receipts=receipts)
@@ -579,6 +605,8 @@ def _validate_stage_receipt(
     record: PacketRecord,
     stage: str,
     receipt: Mapping[str, object],
+    *,
+    require_layout: bool = True,
 ) -> None:
     if stage == "posting_verified":
         if not all(
@@ -609,6 +637,7 @@ def _validate_stage_receipt(
         failures = validate_quality_receipt(
             quality,
             cover_letter_enabled=record.cover_letter_pdf is not None,
+            require_layout=require_layout,
         )
         if failures:
             raise InvalidPacketTransition(
@@ -721,6 +750,8 @@ def validate_packet_history(record: PacketRecord) -> None:
     stage_index = STAGES.index(record.stage)
     receipt_names = set(record.receipts)
     allowed_receipts = set(STAGES[: stage_index + 1])
+    if stage_index >= STAGES.index("quality_checked"):
+        allowed_receipts.add(_LAYOUT_REVALIDATED)
     required_progress_receipts = set(STAGES[1 : stage_index + 1])
     if (
         not receipt_names.issubset(allowed_receipts)
@@ -742,7 +773,54 @@ def validate_packet_history(record: PacketRecord) -> None:
         receipt = record.receipts[stage]
         if not receipt:
             raise InvalidPacketTransition("packet stage receipt is empty")
-        _validate_stage_receipt(record, stage, receipt)
+        # Historical packets remain readable. Explicit advancement and delivery
+        # remeasure final PDFs under the current policy before reporting readiness.
+        _validate_stage_receipt(record, stage, receipt, require_layout=False)
+    if _LAYOUT_REVALIDATED in record.receipts:
+        _validate_layout_revalidation(record, record.receipts[_LAYOUT_REVALIDATED])
+
+
+def _legacy_quality_receipt(record: PacketRecord) -> Mapping[str, object]:
+    quality = record.receipts.get("quality_checked", {})
+    if "resume_layout" in quality:
+        raise InvalidPacketTransition("layout revalidation is only for legacy receipts without resume_layout")
+    if record.profile_hash is None or not isinstance(quality.get("bindings"), Mapping):
+        raise InvalidPacketTransition("legacy layout revalidation requires the original bound editorial approval")
+    _validate_stage_receipt(record, "quality_checked", quality, require_layout=False)
+    return quality
+
+
+def _receipt_hash(receipt: Mapping[str, object]) -> str:
+    encoded = json.dumps(dict(receipt), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _validate_layout_revalidation(record: PacketRecord, receipt: Mapping[str, object]) -> None:
+    quality = _legacy_quality_receipt(record)
+    if (
+        set(receipt) != {"schema_version", "scope", "reviewer", "occurred_at", "quality_receipt_sha256",
+                         "artifact_hashes", "resume_layout"}
+        or type(receipt.get("schema_version")) is not int
+        or receipt["schema_version"] != 1
+        or receipt.get("scope") != "legacy_layout_only"
+        or not isinstance(receipt.get("reviewer"), str)
+        or not receipt["reviewer"].strip()
+    ):
+        raise InvalidPacketTransition("legacy layout revalidation receipt is invalid")
+    try:
+        parse_instant(receipt.get("occurred_at"))
+    except TimestampError as exc:
+        raise InvalidPacketTransition("layout revalidation requires a timezone-aware occurred_at") from exc
+    if (
+        receipt.get("quality_receipt_sha256") != _receipt_hash(quality)
+        or receipt.get("artifact_hashes") != quality["bindings"]["final_pdf_hashes"]
+    ):
+        raise InvalidPacketTransition("layout revalidation does not match the original quality receipt")
+    failures = validate_layout_receipt(receipt.get("resume_layout"))
+    if failures:
+        raise InvalidPacketTransition("layout revalidation failed: " + ", ".join(failures))
+    if receipt["resume_layout"]["pdf_sha256"] != receipt["artifact_hashes"]["resume"]:
+        raise InvalidPacketTransition("layout revalidation PDF hash does not match the original artifacts")
 
 
 def resume_queue(manifest: ApplicationManifest) -> tuple[PacketRecord, ...]:
@@ -898,6 +976,7 @@ def collect_local_artifacts(
     expected = _artifact_paths(record)
     errors: list[str] = []
     hashes: dict[str, str] = {}
+    layout: Mapping[str, object] | None = None
     actual_version_dir = _resolve(workspace, record.version_dir)
     for name, relative_path in expected.items():
         path = _resolve(workspace, relative_path)
@@ -908,11 +987,23 @@ def collect_local_artifacts(
             errors.append(f"{name}_missing")
             continue
         try:
-            _pdf_pages(path)
+            pages = _pdf_pages(path)
         except ValueError:
             errors.append(f"{name}_invalid_pdf")
             continue
         hashes[name] = _hash(path)
+        if pages != (2 if name == "resume" else 1):
+            errors.append(f"{name}_page_count")
+        if name == "resume":
+            try:
+                layout = measure_resume_layout(path)
+            except LayoutMeasurementError as exc:
+                errors.append(f"resume_layout_measurement_error: {exc}")
+            else:
+                if layout["pdf_sha256"] != hashes[name]:
+                    errors.append("resume_changed_during_measurement")
+                if layout["passed"] is not True:
+                    errors.extend(str(error) for error in layout["errors"])
     allowed = {path.name for path in expected.values()}
     extras = [
         path.name
@@ -921,7 +1012,30 @@ def collect_local_artifacts(
     ]
     if extras:
         errors.append("unexpected_employer_facing_pdf")
-    return ArtifactVerification(not errors, tuple(errors), hashes)
+    return ArtifactVerification(not errors, tuple(dict.fromkeys(errors)), hashes, layout)
+
+
+def _require_measured_artifacts(
+    workspace: WorkspacePaths | None,
+    record: PacketRecord,
+    stage: str,
+    receipt: Mapping[str, object],
+) -> None:
+    if workspace is None:
+        raise InvalidPacketTransition("workspace is required to independently measure final PDFs")
+    if stage == "ready":
+        verified = verify_local_artifacts(workspace, record)
+    else:
+        verified = collect_local_artifacts(workspace, record)
+    errors = list(verified.errors)
+    if stage == "quality_checked":
+        if verified.resume_layout != receipt.get("resume_layout"):
+            errors.append("resume_layout_does_not_match_final_pdf")
+        bindings = receipt.get("bindings")
+        if isinstance(bindings, Mapping) and bindings.get("final_pdf_hashes") != dict(verified.hashes):
+            errors.append("quality_pdf_hashes_do_not_match_final_files")
+    if errors:
+        raise InvalidPacketTransition("final PDF checks failed: " + ", ".join(dict.fromkeys(errors)))
 
 
 def verify_local_artifacts(
@@ -930,8 +1044,22 @@ def verify_local_artifacts(
 ) -> ArtifactVerification:
     collected = collect_local_artifacts(workspace, record)
     errors = list(collected.errors)
+    recorded_layout = record.receipts.get("quality_checked", {}).get("resume_layout")
+    if _LAYOUT_REVALIDATED in record.receipts:
+        try:
+            validate_packet_history(record)
+        except InvalidPacketTransition as exc:
+            errors.append(str(exc))
+        else:
+            recorded_layout = record.receipts[_LAYOUT_REVALIDATED]["resume_layout"]
+    errors.extend(validate_layout_receipt(recorded_layout))
+    if recorded_layout != collected.resume_layout:
+        errors.append("resume_layout_does_not_match_final_pdf")
     expected_names = set(_artifact_paths(record))
     receipts: list[tuple[str, Mapping[str, object]]] = []
+    quality_bindings = record.receipts.get("quality_checked", {}).get("bindings")
+    if isinstance(quality_bindings, Mapping) and isinstance(quality_bindings.get("final_pdf_hashes"), Mapping):
+        receipts.append(("quality_checked", quality_bindings["final_pdf_hashes"]))
     for stage in ("saved", "local_verified", "ready"):
         hashes = record.receipts.get(stage, {}).get("artifact_hashes")
         if isinstance(hashes, Mapping):
@@ -977,7 +1105,51 @@ def verify_local_artifacts(
         not errors,
         tuple(dict.fromkeys(errors)),
         collected.hashes,
+        collected.resume_layout,
     )
+
+
+def revalidate_legacy_packet_layout(
+    workspace: WorkspacePaths,
+    manifest: ApplicationManifest,
+    job_id: str,
+    *,
+    reviewer: str,
+    occurred_at: str,
+) -> ApplicationManifest:
+    """Append a layout-only audit without changing prior approval or packet stage.
+
+    Only legacy packets with an intact, hash-bound editorial approval qualify.
+    Existing audits are rechecked and reused; they can never be overwritten.
+    """
+    with workspace_lock(workspace):
+        manifest, record = _delivery_record(workspace, manifest, job_id)
+        if STAGES.index(record.stage) < STAGES.index("quality_checked"):
+            raise InvalidPacketTransition("legacy layout revalidation requires an existing quality approval")
+        validate_packet_history(record)
+        quality = _legacy_quality_receipt(record)
+        if _LAYOUT_REVALIDATED not in record.receipts:
+            measured = collect_local_artifacts(workspace, record)
+            if not measured.valid:
+                raise InvalidPacketTransition("final PDF checks failed: " + ", ".join(measured.errors))
+            audit = {
+                "schema_version": 1,
+                "scope": "legacy_layout_only",
+                "reviewer": reviewer,
+                "occurred_at": occurred_at,
+                "quality_receipt_sha256": _receipt_hash(quality),
+                "artifact_hashes": dict(measured.hashes),
+                "resume_layout": measured.resume_layout,
+            }
+            _validate_layout_revalidation(record, audit)
+            record = replace(record, receipts={**record.receipts, _LAYOUT_REVALIDATED: audit})
+            packets = dict(manifest.packets)
+            packets[job_id] = (*packets[job_id][:-1], record)
+            manifest = replace(manifest, packets=packets)
+        verification = verify_local_artifacts(workspace, record)
+        if not verification.valid:
+            raise InvalidPacketTransition("local artifact checks failed: " + ", ".join(verification.errors))
+        return persist_manifest(workspace, manifest)
 
 
 def complete_local_delivery(
@@ -1041,6 +1213,7 @@ def complete_local_delivery(
             "canonical_job_id": job_id,
             "artifact_hashes": dict(verification.hashes),
         },
+        workspace=workspace,
     )
     return persist_manifest(workspace, completed)
 

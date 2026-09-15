@@ -20,6 +20,7 @@ From the repository root:
 
 ```bash
 python3 scripts/check_environment.py
+python3 -m pip install '.[pdf]'
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 python3 -m compileall -q src scripts
 python3 scripts/validate_plugin.py .

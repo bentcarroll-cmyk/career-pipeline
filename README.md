@@ -34,7 +34,7 @@ flowchart LR
 - **Onboard:** a resumable conversation produces a career profile and search criteria for the user to approve.
 - **Discover:** available sources are checked against those criteria; results explain fit, gaps, and incomplete coverage.
 - **Review:** saved roles retain stable identifiers and lifecycle history so decisions can be revisited.
-- **Prepare:** an explicit request starts a tailored two-page résumé and optional one-page cover letter, with factual, text, and visual review requirements before delivery.
+- **Prepare:** an explicit request starts a tailored two-page résumé and optional one-page cover letter. Final-PDF fullness checks block sparse pages; factual, content-selection, text, and visual reviews remain required. See [resume quality](docs/resume-quality.md).
 
 Discovery schedules are optional and require approval. Application preparation starts when requested. The plugin does not submit applications or contact employers.
 
@@ -63,6 +63,7 @@ The beta targets **Codex Desktop on macOS** and **Python 3.11+**. Native Windows
 Automated tests cover state handling, approval boundaries, discovery evidence, application receipts, migration, privacy patterns, packaging, and a synthetic local journey. From a source checkout, using Python 3.11+:
 
 ```bash
+python3 -m pip install '.[pdf]'
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 python3 scripts/validate_plugin.py .
 python3 scripts/scan_private_data.py .

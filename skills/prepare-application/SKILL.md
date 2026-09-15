@@ -5,7 +5,7 @@ description: Use when a user explicitly asks to create, resume, verify, or expor
 
 # Prepare application
 
-Create verified, versioned application packets for exact canonical local jobs.
+Create verified, versioned application packets for exact canonical local jobs. The default resume is two substantively full, readable pages using supported career evidence. A two-page count alone does not establish completion.
 
 ## Trigger boundary
 
@@ -23,13 +23,16 @@ Create verified, versioned application packets for exact canonical local jobs.
 4. If the approved profile hash changed during interrupted work, explain the conflict and ask whether to restart that job as a new version.
 5. Process multiple jobs independently in the user's order so one failure cannot corrupt another packet.
 
+For a legacy packet whose original `quality_checked` receipt predates `resume_layout`, use the explicit [same-version layout recovery](references/local-delivery-and-optional-export.md#recover-a-legacy-packet-on-the-same-version). Retain the original editorial approval and PDFs. Recovery only adds current layout evidence when every original approval and artifact binding remains valid; it does not approve changed content or missing editorial work.
+
 ## Prepare
 
 1. Re-verify the posting and actual application destination. Preserve source evidence under the version's `working/` folder.
-2. Load the approved profile, writing preferences, and role-specific instructions.
-3. Read [tailoring](references/tailoring.md), derive the employer's central outcomes, and select only supported accomplishments.
-4. Create a two-page resume and, unless disabled globally or for this role, a one-page cover letter using `assets/`.
-5. Read [quality gates](references/quality-gates.md) and run every document and PDF check. Do not advance while any gate fails.
+2. Load the approved profile, writing preferences, role-specific instructions, and the full relevant canonical career sources they identify. Apply later explicit user corrections first. A condensed profile or previous resume does not replace source review.
+3. Read [tailoring](references/tailoring.md). Record the central hiring outcomes, selected evidence, and a reserve of relevant omitted or compressed evidence with source references and specific disposition reasons. User-confirmed career facts are supported evidence; they need no independent third-party verification.
+4. Draft the complete hiring argument at the approved readable typography and margins. Create a two-page resume and, unless disabled globally or for this role, a one-page cover letter using `assets/` as structure aids. Word counts, bullet counts, and template slots are not content ceilings.
+5. Read [page completeness](references/page-completeness.md). Render, measure each page, restore relevant evidence or context, and reflow until both pages pass. More than 38.1 points of unused bottom or internal writable height blocks default resume delivery; a reviewer cannot waive it for scanability.
+6. Read [quality gates](references/quality-gates.md) and run every document and PDF check against the exact final artifacts. If source review and real expansion/reflow trials expose a necessary fact that remains unresolved, ask a precise question before declaring completion; continue independent packet work while awaiting the answer.
 
 ## Save and deliver
 

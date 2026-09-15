@@ -19,9 +19,10 @@ from career_pipeline.packets import (
     verify_local_artifacts,
 )
 from career_pipeline.quality import QualityReceipt
+from career_pipeline.resume_layout import measure_resume_layout
 from career_pipeline.workspace import create_workspace
 from tests.unit.test_job_store import synthetic_assessment, synthetic_candidate
-from tests.pdf_helper import write_minimal_pdf
+from tests.pdf_helper import write_text_pdf
 
 
 def synthetic_packet_options(**changes):
@@ -38,11 +39,12 @@ def synthetic_packet_options(**changes):
     return PacketOptions(**values)
 
 
-def bound_quality_receipt(record, artifact_hashes):
+def bound_quality_receipt(workspace, record, artifact_hashes):
     receipt = QualityReceipt.all_passed(
         2,
         1 if record.cover_letter_pdf is not None else None,
     ).as_dict()
+    receipt["resume_layout"] = measure_resume_layout(workspace.root / record.resume_pdf)
     receipt["bindings"] = {
         "profile_hash": record.profile_hash,
         "criteria_hash": record.criteria_hash,
@@ -71,7 +73,7 @@ def seed_job(workspace) -> str:
     )
 
 
-def advance_to_saved(manifest, job_id, artifact_hashes):
+def advance_to_saved(workspace, manifest, job_id, artifact_hashes):
     manifest = advance_packet(
         manifest,
         job_id,
@@ -93,7 +95,8 @@ def advance_to_saved(manifest, job_id, artifact_hashes):
         manifest,
         job_id,
         "quality_checked",
-        bound_quality_receipt(record, artifact_hashes),
+        bound_quality_receipt(workspace, record, artifact_hashes),
+        workspace=workspace,
     )
     manifest = advance_packet(
         manifest,
@@ -125,9 +128,9 @@ class PacketTests(unittest.TestCase):
                 explicit_request=True,
             )
             actual_resume = workspace.root / record.resume_pdf
-            write_minimal_pdf(actual_resume, pages=2)
+            write_text_pdf(actual_resume, pages=2)
             verification = collect_local_artifacts(workspace, record)
-            manifest = advance_to_saved(manifest, job_id, verification.hashes)
+            manifest = advance_to_saved(workspace, manifest, job_id, verification.hashes)
             complete_local_delivery(
                 workspace,
                 manifest,
@@ -254,9 +257,9 @@ class PacketTests(unittest.TestCase):
                 explicit_request=True,
             )
             actual_resume = workspace.root / record.resume_pdf
-            write_minimal_pdf(actual_resume, pages=2)
+            write_text_pdf(actual_resume, pages=2)
             verification = collect_local_artifacts(workspace, record)
-            manifest = advance_to_saved(manifest, job_id, verification.hashes)
+            manifest = advance_to_saved(workspace, manifest, job_id, verification.hashes)
             completed = complete_local_delivery(
                 workspace,
                 manifest,
@@ -306,10 +309,10 @@ class PacketTests(unittest.TestCase):
                 "drafted",
                 {"draft_hashes": {"resume": "a" * 64}},
             )
-            write_minimal_pdf(workspace.root / record.resume_pdf, pages=2)
+            write_text_pdf(workspace.root / record.resume_pdf, pages=2)
             artifact_hashes = collect_local_artifacts(workspace, record).hashes
             receipt = bound_quality_receipt(
-                manifest.packets[job_id][-1], artifact_hashes
+                workspace, manifest.packets[job_id][-1], artifact_hashes
             )
             receipt["bindings"] = {
                 **receipt["bindings"],
@@ -317,7 +320,7 @@ class PacketTests(unittest.TestCase):
             }
 
             with self.assertRaisesRegex(InvalidPacketTransition, "quality receipt binding"):
-                advance_packet(manifest, job_id, "quality_checked", receipt)
+                advance_packet(manifest, job_id, "quality_checked", receipt, workspace=workspace)
 
     def test_ready_packet_verification_checks_recorded_hash_and_pdf_structure(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -332,9 +335,9 @@ class PacketTests(unittest.TestCase):
                 explicit_request=True,
             )
             resume = workspace.root / record.resume_pdf
-            write_minimal_pdf(resume, pages=2)
+            write_text_pdf(resume, pages=2)
             collected = collect_local_artifacts(workspace, record)
-            manifest = advance_to_saved(manifest, job_id, collected.hashes)
+            manifest = advance_to_saved(workspace, manifest, job_id, collected.hashes)
             completed = complete_local_delivery(
                 workspace,
                 manifest,
@@ -344,7 +347,7 @@ class PacketTests(unittest.TestCase):
             ready = completed.packets[job_id][-1]
             self.assertTrue(verify_local_artifacts(workspace, ready).valid)
 
-            write_minimal_pdf(resume, pages=1)
+            write_text_pdf(resume, pages=1)
             modified = verify_local_artifacts(workspace, ready)
             self.assertFalse(modified.valid)
             self.assertIn("resume_hash_mismatch", modified.errors)
@@ -380,8 +383,8 @@ class PacketTests(unittest.TestCase):
                 occurred_at="2026-09-11T20:05:00Z",
                 explicit_request=True,
             )
-            write_minimal_pdf(workspace.root / record.resume_pdf, pages=2)
-            write_minimal_pdf(workspace.root / record.version_dir / "unexpected.pdf")
+            write_text_pdf(workspace.root / record.resume_pdf, pages=2)
+            write_text_pdf(workspace.root / record.version_dir / "unexpected.pdf")
             result = collect_local_artifacts(workspace, record)
             self.assertFalse(result.valid)
             self.assertIn("unexpected_employer_facing_pdf", result.errors)
@@ -479,7 +482,7 @@ class PacketTests(unittest.TestCase):
                             {"draft_hashes": draft_hashes},
                         )
 
-    def test_pdf_structure_validation_works_without_site_packages(self) -> None:
+    def test_packet_verification_fails_closed_without_pdf_dependency(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw) / "Synthetic-Career"
             workspace = create_workspace(root)
@@ -492,7 +495,7 @@ class PacketTests(unittest.TestCase):
                 occurred_at="2026-09-11T20:05:00Z",
                 explicit_request=True,
             )
-            write_minimal_pdf(workspace.root / record.resume_pdf, pages=2)
+            write_text_pdf(workspace.root / record.resume_pdf, pages=2)
             source_root = Path(__file__).resolve().parents[2] / "src"
             script = "\n".join(
                 (
@@ -503,6 +506,7 @@ class PacketTests(unittest.TestCase):
                     f"relative = Path({record.resume_pdf.as_posix()!r})",
                     "record = PacketRecord(job_id='JOB-000001', employer='Synthetic', title='Lead', version='v001', version_dir=relative.parent, resume_pdf=relative, cover_letter_pdf=None, working_dir=relative.parent / 'working')",
                     "result = collect_local_artifacts(workspace_paths(root), record)",
+                    "print(result.errors)",
                     "raise SystemExit(0 if result.valid else 1)",
                 )
             )
@@ -517,7 +521,8 @@ class PacketTests(unittest.TestCase):
                 text=True,
             )
 
-            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("pdfplumber_unavailable", result.stdout)
 
 
 if __name__ == "__main__":

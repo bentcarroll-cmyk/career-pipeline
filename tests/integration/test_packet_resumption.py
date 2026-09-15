@@ -23,7 +23,7 @@ from career_pipeline.job_store import create_job, read_job, update_job_status
 from career_pipeline.workspace import create_workspace
 from tests.unit.test_job_store import synthetic_assessment, synthetic_candidate
 from tests.unit.test_packets import seed_job
-from tests.pdf_helper import write_minimal_pdf
+from tests.pdf_helper import write_text_pdf
 from tests.unit.test_packets import advance_to_saved, synthetic_packet_options
 
 
@@ -266,9 +266,9 @@ class PacketResumptionTests(unittest.TestCase):
                     occurred_at="2026-09-11T20:05:00Z",
                     explicit_request=True,
                 )
-                write_minimal_pdf(workspace.root / record.resume_pdf, pages=2)
+                write_text_pdf(workspace.root / record.resume_pdf, pages=2)
                 hashes = collect_local_artifacts(workspace, record).hashes
-                manifest = advance_to_saved(manifest, job_id, hashes)
+                manifest = advance_to_saved(workspace, manifest, job_id, hashes)
                 save_manifest(workspace.state / "application-manifest.json", manifest)
                 original = getattr(packets_module, target)
                 calls = 0
@@ -348,9 +348,9 @@ class PacketResumptionTests(unittest.TestCase):
                     status,
                     occurred_at="2026-09-11T20:06:00Z",
                 )
-                write_minimal_pdf(workspace.root / record.resume_pdf, pages=2)
+                write_text_pdf(workspace.root / record.resume_pdf, pages=2)
                 hashes = collect_local_artifacts(workspace, record).hashes
-                manifest = advance_to_saved(manifest, job_id, hashes)
+                manifest = advance_to_saved(workspace, manifest, job_id, hashes)
                 complete_local_delivery(
                     workspace,
                     manifest,
@@ -372,9 +372,9 @@ class PacketResumptionTests(unittest.TestCase):
                 occurred_at="2026-09-11T20:05:00Z",
                 explicit_request=True,
             )
-            write_minimal_pdf(workspace.root / record.resume_pdf, pages=2)
+            write_text_pdf(workspace.root / record.resume_pdf, pages=2)
             hashes = collect_local_artifacts(workspace, record).hashes
-            manifest = advance_to_saved(manifest, job_id, hashes)
+            manifest = advance_to_saved(workspace, manifest, job_id, hashes)
             ready = complete_local_delivery(
                 workspace,
                 manifest,
@@ -420,9 +420,9 @@ class PacketResumptionTests(unittest.TestCase):
                 occurred_at="2026-09-11T20:05:00Z",
                 explicit_request=True,
             )
-            write_minimal_pdf(workspace.root / v1.resume_pdf, pages=2)
+            write_text_pdf(workspace.root / v1.resume_pdf, pages=2)
             hashes = collect_local_artifacts(workspace, v1).hashes
-            v1_manifest = advance_to_saved(v1_manifest, job_id, hashes)
+            v1_manifest = advance_to_saved(workspace, v1_manifest, job_id, hashes)
             persist_manifest(workspace, v1_manifest)
             combined, v2 = restart_packet(
                 workspace,
@@ -518,9 +518,9 @@ class PacketResumptionTests(unittest.TestCase):
                         occurred_at="2026-09-11T20:05:01Z",
                         explicit_request=True,
                     )
-                    write_minimal_pdf(workspace.root / record.resume_pdf, pages=2)
+                    write_text_pdf(workspace.root / record.resume_pdf, pages=2)
                     hashes = collect_local_artifacts(workspace, record).hashes
-                    competing = advance_to_saved(competing, job_id, hashes)
+                    competing = advance_to_saved(workspace, competing, job_id, hashes)
                     complete_local_delivery(
                         workspace,
                         competing,

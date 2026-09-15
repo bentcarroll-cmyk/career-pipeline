@@ -29,6 +29,12 @@ def main() -> int:
     commands.add_parser("status")
     decide = commands.add_parser("decide")
     decide.add_argument("--input", required=True, type=Path)
+    recovery_plan = commands.add_parser("plan-recovery", help="Preview mixed posting IDs without changing the queue")
+    recovery_plan.add_argument("--review-id", action="append", dest="review_ids")
+    recover = commands.add_parser("recover", help="Apply an exact bounded recovery plan")
+    recover.add_argument("--input", required=True, type=Path)
+    prefilter = commands.add_parser("prefilter", help="Apply approved geographic exclusions to pending intact snapshots")
+    prefilter.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     workspace = create_workspace(args.workspace)
     try:
@@ -42,7 +48,16 @@ def main() -> int:
             for value in decisions if isinstance(decisions, list) else [decisions]:
                 review_queue.record_decision(workspace, value["review_id"], value["decision"],
                     expected_revision=value["expected_revision"], expected_context=value["expected_context"], now=args.occurred_at)
-        result = review_queue.summary(workspace, now=args.occurred_at)
+        if args.command == "plan-recovery":
+            result = review_queue.plan_posting_identity_recovery(workspace, review_ids=args.review_ids)
+        elif args.command == "recover":
+            plan = json.loads(args.input.read_text(encoding="utf-8"))
+            result = review_queue.recover_posting_identities(workspace, review_ids=plan["review_ids"],
+                expected_queue_hash=plan["expected_queue_hash"], now=args.occurred_at)
+        elif args.command == "prefilter":
+            result = review_queue.apply_location_prefilter(workspace, now=args.occurred_at, dry_run=args.dry_run)
+        else:
+            result = review_queue.summary(workspace, now=args.occurred_at)
         if args.command == "next":
             if args.limit is not None and args.limit < 1:
                 raise ValueError("positive_limit_required")

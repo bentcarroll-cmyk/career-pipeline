@@ -17,6 +17,7 @@ from career_pipeline.backlog import (
 from career_pipeline.job_store import create_job, reverify_job, update_job_status
 from career_pipeline.packets import (
     ApplicationManifest,
+    collect_local_artifacts,
     save_manifest,
     start_packet,
 )
@@ -25,6 +26,7 @@ from career_pipeline.timestamps import parse_instant
 from career_pipeline.workspace import create_workspace
 from tests.unit.test_job_store import synthetic_assessment, synthetic_candidate
 from tests.unit.test_packets import advance_to_saved, synthetic_packet_options
+from tests.pdf_helper import write_text_pdf
 
 
 class ReviewBacklogTests(unittest.TestCase):
@@ -429,7 +431,10 @@ class ReviewBacklogTests(unittest.TestCase):
                 occurred_at="2026-09-11T19:00:00Z",
                 explicit_request=True,
             )
-            manifest = advance_to_saved(manifest, job_id, {"resume": "a" * 64})
+            record = manifest.packets[job_id][-1]
+            write_text_pdf(workspace.root / record.resume_pdf)
+            hashes = collect_local_artifacts(workspace, record).hashes
+            manifest = advance_to_saved(workspace, manifest, job_id, hashes)
             save_manifest(workspace.state / "application-manifest.json", manifest)
 
             saved = build_actionable_backlog(

@@ -85,6 +85,7 @@ def _source_results(path: Path) -> tuple[tuple[str, SourceResult], ...]:
                     seen_records=tuple(value.get("seen_records", ())),
                     cursor=value.get("cursor"),
                     intake_ids=tuple(value.get("intake_ids", ())),
+                    coverage_scope_ids=tuple(value.get("coverage_scope_ids", ())),
                 ),
             )
         )
@@ -135,12 +136,16 @@ def main() -> int:
         return 3
     payload = json.loads(args.reviewed.read_text(encoding="utf-8"))
     with workspace_lock(workspace):
-        if enabled(workspace):
-            try:
+        try:
+            from career_pipeline.retrieval import validate_source_result
+            if enabled(workspace):
                 validate_delivery(workspace, payload, now=args.occurred_at)
-            except ValueError as exc:
-                print(json.dumps({"error": str(exc)}), file=sys.stderr)
-                return 4
+            else:
+                for source, result in payload.get("source_results", {}).items():
+                    validate_source_result(workspace, source, result, now=args.occurred_at)
+        except ValueError as exc:
+            print(json.dumps({"error": str(exc)}), file=sys.stderr)
+            return 4
         criteria_path = workspace.profile / "Search_Criteria.json"
         criteria = (
             load_search_criteria(

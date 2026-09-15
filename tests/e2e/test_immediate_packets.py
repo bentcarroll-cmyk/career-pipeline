@@ -16,7 +16,7 @@ from career_pipeline.packets import (
 from career_pipeline.quality import QualityReceipt
 from career_pipeline.workspace import create_workspace
 from tests.unit.test_job_store import synthetic_assessment, synthetic_candidate
-from tests.pdf_helper import write_minimal_pdf
+from tests.pdf_helper import write_text_pdf
 from tests.unit.test_packets import (
     bound_quality_receipt,
     synthetic_packet_options,
@@ -50,7 +50,7 @@ def seed_jobs(workspace) -> tuple[str, str]:
 
 def advance_to_ready(workspace, manifest, job_id):
     record = manifest.packets[job_id][-1]
-    write_minimal_pdf(workspace.root / record.resume_pdf, pages=2)
+    write_text_pdf(workspace.root / record.resume_pdf, pages=2)
     from career_pipeline.packets import collect_local_artifacts
 
     artifact_hashes = collect_local_artifacts(workspace, record).hashes
@@ -74,7 +74,8 @@ def advance_to_ready(workspace, manifest, job_id):
         manifest,
         job_id,
         "quality_checked",
-        bound_quality_receipt(manifest.packets[job_id][-1], artifact_hashes),
+        bound_quality_receipt(workspace, manifest.packets[job_id][-1], artifact_hashes),
+        workspace=workspace,
     )
     manifest = advance_packet(
         manifest,

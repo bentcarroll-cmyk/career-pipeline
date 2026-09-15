@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from career_pipeline.checkpoints import (
@@ -12,9 +13,44 @@ from career_pipeline.checkpoints import (
     save_discovery_state,
 )
 from career_pipeline.workspace import create_workspace
+from tests.retrieval_fixtures import completed_board_result
 
 
 class CheckpointTests(unittest.TestCase):
+    def test_duplicate_source_results_cannot_hide_invalid_success_before_merge(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            valid = completed_board_result(workspace, "greenhouse", "SYN-1", "2026-09-11T12:00:00Z")
+            merge_discovery_state(workspace, DiscoveryState(), (("greenhouse", valid),))
+            path = workspace.state / "discovery-state.json"
+            before = path.read_bytes()
+            invalid = replace(valid, completed_at="2026-09-11T13:00:00Z",
+                              seen_records=("never-returned",), cursor="bogus")
+            with self.assertRaisesRegex(ValueError, "duplicate_source"):
+                merge_discovery_state(workspace,
+                    DiscoveryState(canonical_jobs={"req:unwritten:1": "JOB-000009"}),
+                    (("greenhouse", invalid), ("greenhouse", valid)))
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_mixed_source_completion_instants_are_order_independent_and_ignore_failed_timestamp(self) -> None:
+        from career_pipeline import retrieval
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = create_workspace(Path(raw) / "Synthetic-Career")
+            greenhouse = completed_board_result(workspace, "greenhouse", "SYN-1", "2026-09-11T12:00:00Z")
+            scope = retrieval.register_scope(workspace, run_id="mixed", source="ashby", provider="ashby",
+                query={"board": "example", "employer": "Example"}, now="2026-09-11T12:30:00Z")
+            scope = retrieval.capture_response(workspace, scope["scope_id"], {"jobs": []}, now="2026-09-11T12:30:00Z")
+            ashby = SourceResult(True, "2026-09-11T13:00:00Z", (), None, tuple(scope["intake_ids"]), (scope["scope_id"],))
+            failed = SourceResult(False, "unparseable partial timestamp", (), "retry")
+            for results in ((("greenhouse", greenhouse), ("ashby", ashby)),
+                            (("ashby", ashby), ("greenhouse", greenhouse)),
+                            (("indeed", failed), ("greenhouse", greenhouse), ("ashby", ashby))):
+                with self.subTest(order=[source for source, _ in results]):
+                    merged = merge_discovery_state(workspace, DiscoveryState(), results)
+                    self.assertEqual(merged.sources["greenhouse"].last_successful_at, "2026-09-11T12:00:00Z")
+                    self.assertEqual(merged.sources["ashby"].last_successful_at, "2026-09-11T13:00:00Z")
+                    self.assertNotIn("indeed", merged.sources)
+
     def test_checkpoint_recency_uses_instants_instead_of_timestamp_text(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace = create_workspace(Path(raw) / "Synthetic-Career")
@@ -24,12 +60,8 @@ class CheckpointTests(unittest.TestCase):
                 (
                     (
                         "greenhouse",
-                        SourceResult(
-                            True,
-                            "2026-09-11T12:30:00+00:00",
-                            ("SYN-OLD",),
-                            "old",
-                        ),
+                        completed_board_result(workspace, "greenhouse", "SYN-OLD",
+                            "2026-09-11T12:30:00+00:00", cursor="old"),
                     ),
                 ),
             )
@@ -40,12 +72,8 @@ class CheckpointTests(unittest.TestCase):
                 (
                     (
                         "greenhouse",
-                        SourceResult(
-                            True,
-                            "2026-09-11T09:00:00-04:00",
-                            ("SYN-NEW",),
-                            "new",
-                        ),
+                        completed_board_result(workspace, "greenhouse", "SYN-NEW",
+                            "2026-09-11T09:00:00-04:00", cursor="new"),
                     ),
                 ),
             )
@@ -65,7 +93,7 @@ class CheckpointTests(unittest.TestCase):
                 (
                     (
                         "greenhouse",
-                        SourceResult(True, "2026-09-11T12:00:00Z", ("SYN-1",), "a"),
+                        completed_board_result(workspace, "greenhouse", "SYN-1", "2026-09-11T12:00:00Z", cursor="a"),
                     ),
                 ),
             )
@@ -75,7 +103,7 @@ class CheckpointTests(unittest.TestCase):
                 (
                     (
                         "public-search",
-                        SourceResult(True, "2026-09-11T12:01:00Z", ("SYN-2",), "b"),
+                        completed_board_result(workspace, "public-search", "SYN-2", "2026-09-11T12:01:00Z", cursor="b"),
                     ),
                 ),
             )

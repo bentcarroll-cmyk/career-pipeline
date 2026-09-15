@@ -29,6 +29,7 @@ _RUNTIME_FILES = (
     "docs/private-beta-installation.md",
     "docs/private-beta-upgrades.md",
     "docs/releasing.md",
+    "docs/resume-quality.md",
     "pyproject.toml",
 )
 _SKIP_PARTS = {"__pycache__", ".pytest_cache"}

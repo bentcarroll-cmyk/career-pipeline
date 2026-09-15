@@ -4,10 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "career-pipeline"
-version = "0.1.4"
+version = "0.1.9"
 description = "Deterministic local tools for the Career Pipeline Codex plugin"
 requires-python = ">=3.11"
 dependencies = []
+
+[project.optional-dependencies]
+pdf = ["pdfplumber>=0.11,<0.12"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

@@ -56,7 +56,7 @@ from career_pipeline.sources.base import SourceSnapshot
 from career_pipeline.sources.generic import normalize as normalize_generic
 from career_pipeline.sources.greenhouse import normalize as normalize_greenhouse
 from career_pipeline.workspace import create_workspace, preserve_source_resume
-from tests.pdf_helper import write_minimal_pdf
+from tests.pdf_helper import write_text_pdf
 from tests.unit.test_packets import bound_quality_receipt, synthetic_packet_options
 
 
@@ -109,10 +109,10 @@ def _reviewed(
 def _finish_packet(workspace, manifest, job_id, occurred_at):
     record = manifest.packets[job_id][-1]
     resume = workspace.root / record.resume_pdf
-    write_minimal_pdf(resume, pages=2)
+    write_text_pdf(resume, pages=2)
     if record.cover_letter_pdf is not None:
         cover_letter = workspace.root / record.cover_letter_pdf
-        write_minimal_pdf(cover_letter, pages=1)
+        write_text_pdf(cover_letter, pages=1)
     artifact_hashes = collect_local_artifacts(workspace, record).hashes
     if record.stage == "selected":
         manifest = advance_packet(
@@ -138,8 +138,9 @@ def _finish_packet(workspace, manifest, job_id, occurred_at):
             job_id,
             "quality_checked",
             bound_quality_receipt(
-                manifest.packets[job_id][-1], artifact_hashes
+                workspace, manifest.packets[job_id][-1], artifact_hashes
             ),
+            workspace=workspace,
         )
     if manifest.packets[job_id][-1].stage == "quality_checked":
         manifest = advance_packet(

@@ -14,7 +14,7 @@ from typing import Callable, Mapping, Sequence
 from .atomic import atomic_write_json, load_json
 from .contracts import WorkspacePaths
 from .evaluation import JobAssessment
-from .job_store import workspace_lock
+from .job_store import workspace_lock_if_needed as workspace_lock
 from .onboarding import load_onboarding_state
 from .sources.base import CandidateJob
 
@@ -45,11 +45,36 @@ class CriteriaRule:
 
 
 @dataclass(frozen=True)
+class DiscoveryLocationScope:
+    policy: str
+    user_confirmed: bool
+    local_labels: tuple[str, ...]
+    exception_labels: tuple[str, ...] = ()
+    broad_labels: tuple[str, ...] = ()
+
+
+def validate_location_scope(scope: DiscoveryLocationScope) -> None:
+    if (not isinstance(scope, DiscoveryLocationScope)
+            or scope.policy != "exclude_nonlocal_without_remote_option"
+            or scope.user_confirmed is not True):
+        raise CriteriaError("discovery location policy requires explicit confirmation")
+    for name in ("local_labels", "exception_labels", "broad_labels"):
+        values = getattr(scope, name)
+        if (type(values) is not tuple or len(values) > 100
+                or any(type(v) is not str or not 1 <= len(v.strip()) <= 150 for v in values)
+                or len(set(values)) != len(values)):
+            raise CriteriaError("invalid discovery location labels")
+    if not scope.local_labels:
+        raise CriteriaError("discovery location policy requires local labels")
+
+
+@dataclass(frozen=True)
 class SearchCriteria:
     readable_criteria_path: str
     readable_criteria_sha256: str
     rules: tuple[CriteriaRule, ...]
     schema_version: int = 1
+    discovery_location_scope: DiscoveryLocationScope | None = None
 
     @property
     def structured_sha256(self) -> str:
@@ -166,15 +191,25 @@ def criteria_to_mapping(criteria: SearchCriteria) -> dict[str, object]:
                 threshold["pay_period"] = rule.threshold.pay_period
             item["threshold"] = threshold
         rules.append(item)
-    return {
+    result = {
         "schema_version": criteria.schema_version,
         "readable_criteria_path": criteria.readable_criteria_path,
         "readable_criteria_sha256": criteria.readable_criteria_sha256,
         "rules": rules,
     }
+    if criteria.discovery_location_scope is not None:
+        scope = criteria.discovery_location_scope
+        result["discovery_location_scope"] = {
+            "policy": scope.policy, "user_confirmed": scope.user_confirmed,
+            "local_labels": list(scope.local_labels), "exception_labels": list(scope.exception_labels),
+            "broad_labels": list(scope.broad_labels),
+        }
+    return result
 
 
 def validate_search_criteria(criteria: SearchCriteria) -> None:
+    if criteria.discovery_location_scope is not None:
+        validate_location_scope(criteria.discovery_location_scope)
     if type(criteria.schema_version) is not int or criteria.schema_version != 1:
         raise CriteriaError("structured search criteria schema version must equal 1")
     if criteria.readable_criteria_path != "Profile/Search_Criteria.md":
@@ -196,17 +231,30 @@ def load_search_criteria(path: Path, *, readable_path: Path) -> SearchCriteria:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise CriteriaError("structured search criteria could not be read") from exc
-    if type(raw) is not dict or set(raw) != _ROOT_KEYS:
+    if type(raw) is not dict or set(raw) not in (_ROOT_KEYS, _ROOT_KEYS | {"discovery_location_scope"}):
         raise CriteriaError("structured search criteria fields are invalid")
     if type(raw["schema_version"]) is not int or raw["schema_version"] != 1:
         raise CriteriaError("structured search criteria schema version must equal 1")
     if type(raw["rules"]) is not list:
         raise CriteriaError("structured search criteria rules must be an array")
     rules = tuple(_rule_from_mapping(item, index) for index, item in enumerate(raw["rules"]))
+    location_scope = None
+    if "discovery_location_scope" in raw:
+        value = raw["discovery_location_scope"]
+        if (type(value) is not dict or set(value) != {
+                "policy", "user_confirmed", "local_labels", "exception_labels", "broad_labels"}
+                or any(type(value[name]) is not list for name in ("local_labels", "exception_labels", "broad_labels"))):
+            raise CriteriaError("invalid discovery location policy fields")
+        location_scope = DiscoveryLocationScope(
+            policy=value["policy"], user_confirmed=value["user_confirmed"],
+            local_labels=tuple(value["local_labels"]), exception_labels=tuple(value["exception_labels"]),
+            broad_labels=tuple(value["broad_labels"]),
+        )
     criteria = SearchCriteria(
         readable_criteria_path=raw["readable_criteria_path"],
         readable_criteria_sha256=raw["readable_criteria_sha256"],
         rules=rules,
+        discovery_location_scope=location_scope,
     )
     validate_search_criteria(criteria)
     try:

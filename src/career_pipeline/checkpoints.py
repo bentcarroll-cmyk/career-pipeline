@@ -28,6 +28,7 @@ class SourceResult:
     seen_records: tuple[str, ...]
     cursor: str | None
     intake_ids: tuple[str, ...] = ()
+    coverage_scope_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -142,15 +143,23 @@ def merge_discovery_state(
     source_results: tuple[tuple[str, SourceResult], ...],
 ) -> DiscoveryState:
     """Merge one completed run into the latest state without losing other runs."""
+    source_names = [source for source, _ in source_results]
+    if len(source_names) != len(set(source_names)):
+        raise DiscoveryStateError("duplicate_source_results")
     state_path = workspace.state / "discovery-state.json"
     with workspace_lock(workspace):
         from .review_queue import enabled, validate_delivery
-        if enabled(workspace):
-            validate_delivery(workspace, {"source_results": {
+        from .retrieval import validate_source_result
+        if not enabled(workspace):
+            for source, result in source_results:
+                validate_source_result(workspace, source, result, now=result.completed_at)
+        validate_delivery(workspace, {"source_results": {
                 source: {"success": result.success, "completed_at": result.completed_at,
-                         "seen_records": result.seen_records, "intake_ids": result.intake_ids}
+                         "seen_records": result.seen_records, "intake_ids": result.intake_ids,
+                         "coverage_scope_ids": result.coverage_scope_ids}
                 for source, result in source_results
-            }}, now=source_results[0][1].completed_at if source_results else "1970-01-01T00:00:00+00:00", require_delivered=True)
+            }}, now=max((result.completed_at for _, result in source_results if result.success),
+                        key=parse_instant, default="1970-01-01T00:00:00+00:00"), require_delivered=True)
         latest = (
             load_discovery_state(state_path)
             if state_path.exists()
